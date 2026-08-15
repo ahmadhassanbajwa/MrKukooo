@@ -210,27 +210,27 @@ export default function CustomerView({
         </div>
       )}
       {/* Header / Navbar */}
-      <header className="bg-accent text-white px-6 py-4 border-b-4 border-secondary flex justify-between items-center comic-shadow-sm sticky top-0 z-40">
+      <header className="bg-accent text-white px-3 py-3 sm:px-6 sm:py-4 border-b-4 border-secondary flex justify-between items-center gap-2 comic-shadow-sm sticky top-0 z-40">
         <div 
-          className="flex items-center gap-3 cursor-pointer"
+          className="flex items-center gap-2 sm:gap-3 cursor-pointer shrink-0"
           onClick={() => {
             setViewMode('home');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
         >
-          <div className="w-10 h-10 rounded-lg bg-white comic-border-sm flex items-center justify-center overflow-hidden">
+          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-white comic-border-sm flex items-center justify-center overflow-hidden shrink-0">
             <img src="/logo.png" alt="Mr. Kukooo" className="w-full h-full object-cover scale-110" />
           </div>
-          <div>
-            <h1 className="text-xl lg:text-2xl font-black text-secondary tracking-tight">Mr. Kukooo</h1>
-            <span className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Lick the spoons!</span>
+          <div className="flex flex-col justify-center">
+            <h1 className="text-base sm:text-xl lg:text-2xl font-black text-secondary tracking-tight leading-none whitespace-nowrap">Mr. Kukooo</h1>
+            <span className="text-[8px] sm:text-[10px] text-white/50 font-bold uppercase tracking-wider whitespace-nowrap mt-0.5">Lick the spoons!</span>
           </div>
         </div>
 
         {/* Branch Context Selector & Control Buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {normalizedBranches.length > 0 && (
-            <div className="hidden sm:flex items-center gap-1 bg-white/10 px-3.5 py-1.5 rounded-xl border-2 border-white/30">
+            <div className="hidden md:flex items-center gap-1 bg-white/10 px-3.5 py-1.5 rounded-xl border-2 border-white/30">
               <MapPin className="w-3.5 h-3.5 text-secondary" />
               <select
                 value={selectedBranchId}
@@ -248,18 +248,21 @@ export default function CustomerView({
 
           <button
             onClick={() => setIsTrackerOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white/10 border-2 border-white text-white font-black text-xs rounded-xl comic-shadow-sm comic-hover cursor-pointer"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3.5 py-1.5 sm:py-2 bg-white/10 border-2 border-white text-white font-black text-[10px] sm:text-xs rounded-lg sm:rounded-xl comic-shadow-sm comic-hover cursor-pointer whitespace-nowrap"
           >
-            <Clock className="w-4 h-4 text-secondary" /> Track Order
+            <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-secondary shrink-0" /> 
+            <span className="hidden sm:inline">Track Order</span>
+            <span className="sm:hidden">Track</span>
           </button>
 
           <button
             onClick={() => setIsCartOpen(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-secondary text-accent font-black text-xs rounded-xl comic-border-sm comic-shadow-sm comic-hover relative cursor-pointer"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-1.5 sm:py-2 bg-secondary text-accent font-black text-[10px] sm:text-xs rounded-lg sm:rounded-xl comic-border-sm comic-shadow-sm comic-hover relative cursor-pointer whitespace-nowrap"
           >
-            <ShoppingCart className="w-4 h-4" /> Cart
+            <ShoppingCart className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" /> 
+            <span>Cart</span>
             {cart.length > 0 && (
-              <span className="absolute top-[-8px] right-[-8px] w-5.5 h-5.5 rounded-full bg-primary text-white border-2 border-accent text-[9px] flex items-center justify-center font-black">
+              <span className="absolute top-[-6px] right-[-6px] sm:top-[-8px] sm:right-[-8px] w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-primary text-white border-2 border-accent text-[9px] sm:text-[10px] flex items-center justify-center font-black">
                 {cart.reduce((s, i) => s + i.quantity, 0)}
               </span>
             )}
