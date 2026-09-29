@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #C8102E; /* Premium crimson */
+  --color-primary-hover: #B00D27;
+  --color-secondary: #F5A623; /* Warm gold/amber */
+  --color-secondary-hover: #DF9317;
+  --color-accent: #18181B; /* Refined zinc/charcoal */
+  --color-bg-alt: #FDFDFD;
+  --font-heading: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  --font-body: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+:root {
+  --color-primary: #C8102E;
+  --color-primary-hover: #B00D27;
+  --color-secondary: #F5A623;
+  --color-secondary-hover: #DF9317;
+  --color-accent: #18181B;
+  --color-bg-alt: #FDFDFD;
+  --font-heading: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  --font-body: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #F8FAFC;
+  color: #18181B;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Professional Modern Shadows and Borders (Replacing legacy cartoon borders) */
+.comic-border-sm {
+  border: 1px solid #E2E8F0;
+}
+
+.comic-border {
+  border: 1px solid #E2E8F0;
+}
+
+.comic-border-lg {
+  border: 1.5px solid #CBD5E1;
+}
+
+.comic-shadow-sm, .comic-shadow-xs {
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+}
+
+.comic-shadow {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+}
+
+.comic-shadow-lg {
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.07), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+}
+
+.comic-shadow-xl {
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+}
+
+.comic-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.comic-hover:hover {
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 12px -2px rgba(0, 0, 0, 0.08);
+}
+
+.comic-hover:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* Custom Thin Scrollbar replacing no-scrollbar */
+.no-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.no-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.no-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.5);
+  border-radius: 20px;
+}
+.no-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(107, 114, 128, 0.8);
+}
+.no-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+}
+
+@media print {
+  @page {
+    margin: 0;
+    size: 80mm auto;
+  }
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #fff;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #kukooo-receipt-content, #kukooo-receipt-content * {
+    visibility: visible;
+    color: #000 !important; /* Force black for thermal printers */
+  }
+  #kukooo-receipt-content {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+    margin: 0;
+    padding: 10px;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+  }
+}
+
+/* Pulse animation for active orders */
+@keyframes soft-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(0.97);
+  }
+}
+
+.animate-pulse-soft {
+  animation: soft-pulse 2.5s infinite ease-in-out;
+}
+
+/* Smooth customizer and tracker transitions */
+.animate-slide-in {
+  animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-scale-up {
+  animation: scaleUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes scaleUp {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
