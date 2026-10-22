@@ -10,6 +10,13 @@ export default function StaffLogin({ onLogin, navigateToHome }) {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const fillTestCredentials = (selectedRole) => {
+    setRole(selectedRole);
+    setLoginId(`${selectedRole}@mrkukooo.com`);
+    setPassword(selectedRole);
+    setError('');
+  };
+
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -160,6 +167,25 @@ export default function StaffLogin({ onLogin, navigateToHome }) {
         </form>
 
         <div className="border-t border-dashed border-gray-200 pt-3 text-center space-y-2">
+          <p className="text-[10px] sm:text-xs font-medium text-gray-400 uppercase tracking-wider">
+            Testing: Fill Credentials
+          </p>
+          <div className="flex gap-2 justify-center">
+            <button
+              type="button"
+              onClick={() => fillTestCredentials('manager')}
+              className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-900 font-medium px-3 py-1.5 rounded-md border border-amber-200 transition-colors cursor-pointer"
+            >
+              Fill Manager
+            </button>
+            <button
+              type="button"
+              onClick={() => fillTestCredentials('employee')}
+              className="text-xs bg-red-50 hover:bg-red-100 text-primary font-medium px-3 py-1.5 rounded-md border border-red-200 transition-colors cursor-pointer"
+            >
+              Fill Employee
+            </button>
+          </div>
           {isSupabaseConfigured && (
             <p className="text-[10px] text-gray-400 font-normal">
               Sign in with an account provisioned by your Supabase administrator.
