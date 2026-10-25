@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { 
   isSupabaseConfigured,
   getAuthenticatedStaffRole,
@@ -108,6 +108,7 @@ export default function App() {
   const [orders, setOrders] = useState(() =>
     isSupabaseConfigured ? [] : getCachedData('kukooo_orders', INITIAL_ORDERS)
   );
+  const ordersFetchVersion = useRef(0);
   const [addons, setAddons] = useState(() => getCachedData('kukooo_addons', INITIAL_ADDONS));
   const [homepageSections, setHomepageSections] = useState(() => getCachedData('kukooo_homepage_sections', INITIAL_HOMEPAGE_SECTIONS));
   const [branches, setBranches] = useState(() => getCachedData('kukooo_branches', INITIAL_BRANCHES));
@@ -181,42 +182,51 @@ export default function App() {
     const initializeAppBackend = async () => {
       // Run database seed check in background
       seedDatabaseIfEmpty();
+      const ordersRequestVersion = ++ordersFetchVersion.current;
 
-      try {
-        const [cats, prods, offs, ords, adds, secs, brs, ings, vchs, vchSettings] = await Promise.all([
-          getCategories(),
-          getProducts(),
-          getOffers(),
-          getOrders(),
-          getAddons(),
-          getHomepageSections(),
-          getBranches(),
-          getIngredients(),
-          getVouchers(),
-          getVoucherSettings()
-        ]);
-        
-        if (isMounted) {
-          if (cats && cats.length) setCategories(cats);
-          if (prods && prods.length) setProducts(prods);
-          if (offs && offs.length) setOffers(offs);
-          if (Array.isArray(ords)) setOrders(ords);
-          if (adds && adds.length) setAddons(adds);
-          if (secs && secs.length) setHomepageSections(secs);
-          if (brs && brs.length) setBranches(brs);
-          if (ings && ings.length) setIngredients(ings);
-          if (vchs && vchs.length) setVouchers(vchs);
-          if (vchSettings) setVoucherSettings(vchSettings);
+      const results = await Promise.allSettled([
+        getCategories(),
+        getProducts(),
+        getOffers(),
+        getOrders(),
+        getAddons(),
+        getHomepageSections(),
+        getBranches(),
+        getIngredients(),
+        getVouchers(),
+        getVoucherSettings()
+      ]);
+      if (!isMounted) return;
+
+      const names = ['categories', 'products', 'offers', 'orders', 'addons', 'homepage sections', 'branches', 'ingredients', 'vouchers', 'voucher settings'];
+      const values = results.map((result, index) => {
+        if (result.status === 'rejected') {
+          console.error(`Error loading ${names[index]} from backend:`, result.reason);
+          return null;
         }
-      } catch (err) {
-        console.error("Error loading initial data from backend:", err);
-      }
+        return result.value;
+      });
+      const [cats, prods, offs, ords, adds, secs, brs, ings, vchs, vchSettings] = values;
+
+      if (cats && cats.length) setCategories(cats);
+      if (prods && prods.length) setProducts(prods);
+      if (offs && offs.length) setOffers(offs);
+      if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(ords)) setOrders(ords);
+      if (adds && adds.length) setAddons(adds);
+      if (secs && secs.length) setHomepageSections(secs);
+      if (brs && brs.length) setBranches(brs);
+      if (ings && ings.length) setIngredients(ings);
+      if (vchs && vchs.length) setVouchers(vchs);
+      if (vchSettings) setVoucherSettings(vchSettings);
     };
 
     initializeAppBackend();
 
     const unsubscribeOrders = subscribeToOrders((updatedOrders) => {
-      if (isMounted && updatedOrders) setOrders(updatedOrders);
+      if (isMounted && Array.isArray(updatedOrders)) {
+        ordersFetchVersion.current += 1;
+        setOrders(updatedOrders);
+      }
     });
 
     const unsubscribeProducts = subscribeToProducts((updatedProducts) => {
@@ -260,32 +270,38 @@ export default function App() {
 
   // --- DATA REFRESH HELPER (Targeted / Non-blocking) ---
   const refreshData = async () => {
-    try {
-      const [cats, prods, offs, ords, adds, secs, brs, ings, vchs, vchSettings] = await Promise.all([
-        getCategories(),
-        getProducts(),
-        getOffers(),
-        getOrders(),
-        getAddons(),
-        getHomepageSections(),
-        getBranches(),
-        getIngredients(),
-        getVouchers(),
-        getVoucherSettings()
-      ]);
-      setCategories(cats);
-      setProducts(prods);
-      setOffers(offs);
-      setOrders(ords);
-      setAddons(adds);
-      setHomepageSections(secs);
-      setBranches(brs);
-      setIngredients(ings);
-      if (vchs) setVouchers(vchs);
-      if (vchSettings) setVoucherSettings(vchSettings);
-    } catch (error) {
-      console.error("Failed to refresh app data:", error);
-    }
+    const ordersRequestVersion = ++ordersFetchVersion.current;
+    const results = await Promise.allSettled([
+      getCategories(),
+      getProducts(),
+      getOffers(),
+      getOrders(),
+      getAddons(),
+      getHomepageSections(),
+      getBranches(),
+      getIngredients(),
+      getVouchers(),
+      getVoucherSettings()
+    ]);
+    const names = ['categories', 'products', 'offers', 'orders', 'addons', 'homepage sections', 'branches', 'ingredients', 'vouchers', 'voucher settings'];
+    const values = results.map((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`Failed to refresh ${names[index]}:`, result.reason);
+        return null;
+      }
+      return result.value;
+    });
+    const [cats, prods, offs, ords, adds, secs, brs, ings, vchs, vchSettings] = values;
+    if (cats) setCategories(cats);
+    if (prods) setProducts(prods);
+    if (offs) setOffers(offs);
+    if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(ords)) setOrders(ords);
+    if (adds) setAddons(adds);
+    if (secs) setHomepageSections(secs);
+    if (brs) setBranches(brs);
+    if (ings) setIngredients(ings);
+    if (vchs) setVouchers(vchs);
+    if (vchSettings) setVoucherSettings(vchSettings);
   };
 
   // --- OPTIMISTIC OPERATIONS API ---
@@ -293,8 +309,9 @@ export default function App() {
     try {
       const result = await archiveAndPurgeOrders(params);
       // Refresh archives and orders optimistically
+      const ordersRequestVersion = ++ordersFetchVersion.current;
       const [newOrds, newArchs] = await Promise.all([getOrders(), getArchivedAnalytics()]);
-      setOrders(newOrds);
+      if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(newOrds)) setOrders(newOrds);
       setArchivedAnalytics(newArchs);
       return result;
     } catch (err) {
@@ -393,6 +410,7 @@ export default function App() {
     const { ingredientDeductions, productDeductions } = calculateOrderDeductions(newOrder.items || [], products);
 
     // 3. Optimistic UI: Prepend order to state
+    ordersFetchVersion.current += 1;
     setOrders(prev => [newOrder, ...prev]);
 
     // Increment voucher usage optimistically
@@ -428,6 +446,7 @@ export default function App() {
     const isUncancelling = prevStatus === 'cancelled' && nextStatus !== 'cancelled';
 
     // 1. Optimistic status update
+    ordersFetchVersion.current += 1;
     setOrders(prev => prev.map(o => o.order_id === orderId ? { ...o, status: newStatus } : o));
 
     // 2. Optimistic inventory update when order status changes to/from cancelled
@@ -453,6 +472,7 @@ export default function App() {
   };
 
   const updateOrderDetails = async (orderId, items, totalAmount, extraFields = {}) => {
+    ordersFetchVersion.current += 1;
     setOrders(prev => prev.map(o => o.order_id === orderId ? { ...o, items, total_amount: totalAmount, ...extraFields } : o));
     try {
       await updateOrderDetailsInDB(orderId, items, totalAmount, extraFields);
@@ -462,6 +482,7 @@ export default function App() {
   };
 
   const handleDeleteOrder = async (orderId) => {
+    ordersFetchVersion.current += 1;
     setOrders(prev => prev.filter(o => o.order_id !== orderId));
     try {
       await deleteOrderInDB(orderId);

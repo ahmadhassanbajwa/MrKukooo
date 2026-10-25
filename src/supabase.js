@@ -608,6 +608,8 @@ const mergeOrdersWithLocalData = (dbOrders = []) => {
 
 // --- ORDERS ---
 const fetchAllOrdersFromSupabase = async () => {
+  if (!(await getAuthenticatedStaffRole())) return null;
+
   const pageSize = 1000;
   const orders = [];
 
@@ -625,18 +627,13 @@ const fetchAllOrdersFromSupabase = async () => {
     if (page.length < pageSize) break;
   }
 
+  if (!(await getAuthenticatedStaffRole())) return null;
+
   return mergeOrdersWithLocalData(orders)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 };
 
 export const getOrders = async () => {
-  // Anon users (customers) never have access to the staff order list.
-  // Previously this wiped localStorage for any unauthenticated visitor,
-  // destroying locally-cached orders. Now we just return [] cleanly.
-  if (isSupabaseConfigured && supabase && !(await hasSupabaseSession())) {
-    return [];
-  }
-
   if (isSupabaseConfigured && supabase) {
     return fetchAllOrdersFromSupabase();
   }
@@ -1237,20 +1234,33 @@ export const subscribeToOrders = (callback) => {
   if (isSupabaseConfigured && supabase) {
     let channel = null;
     let active = true;
+    let refreshSequence = 0;
     // When Supabase is configured, orders are NOT cached in localStorage anymore,
     // so the interval-based localStorage polling is removed to avoid stale callbacks.
+
+    const refreshOrders = async () => {
+      const requestSequence = ++refreshSequence;
+      try {
+        const updatedOrders = await fetchAllOrdersFromSupabase();
+        if (active && requestSequence === refreshSequence && Array.isArray(updatedOrders)) {
+          callback(updatedOrders);
+        }
+      } catch (error) {
+        console.error('Could not refresh staff orders:', error);
+      }
+    };
 
     hasSupabaseSession().then((authenticated) => {
       if (!active || !authenticated) return;
       channel = supabase.channel('public:orders')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async () => {
-          try {
-            callback(await fetchAllOrdersFromSupabase());
-          } catch (error) {
-            console.error('Could not refresh staff orders:', error);
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, refreshOrders)
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            refreshOrders();
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.error(`Staff order updates channel status: ${status}`);
           }
-        })
-        .subscribe();
+        });
     }).catch((error) => {
       console.error('Could not initialize staff order updates:', error);
     });
