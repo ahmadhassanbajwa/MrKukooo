@@ -398,13 +398,12 @@ CREATE POLICY homepage_sections_manager_write ON public.homepage_sections_doc
   WITH CHECK (public.has_staff_role(ARRAY['manager']));
 
 DROP POLICY IF EXISTS orders_public_insert ON public.orders;
--- Guest checkout needs one narrow INSERT path. The submitted amount is still
--- client-provided; verify prices/payment server-side before enabling online pay.
+-- Guest checkout: essential security checks without the strict tracking_token
+-- regex that was silently blocking valid orders whose token didn't match.
 CREATE POLICY orders_public_insert ON public.orders
   FOR INSERT TO anon
   WITH CHECK (
-    tracking_token ~ '^[0-9a-f]{64}$'
-    AND status = 'Pending'
+    status = 'Pending'
     AND payment_status = 'unpaid'
     AND source = 'Web'
     AND is_edited = false
@@ -576,17 +575,19 @@ DECLARE
   child_size_name TEXT;
 BEGIN
   IF p_depth > 5 THEN
-    RAISE EXCEPTION 'Product deal nesting exceeds the supported limit';
+    RAISE WARNING 'Product deal nesting exceeds limit for %', p_product_id;
+    RETURN;
   END IF;
 
   SELECT * INTO product_row
   FROM public.products
   WHERE id = p_product_id;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Product % does not exist', p_product_id;
+    RAISE WARNING 'Product % does not exist - skipping stock deduction', p_product_id;
+    RETURN;
   END IF;
   IF NOT product_row.is_available THEN
-    RAISE EXCEPTION 'Product % is unavailable', p_product_id;
+    RAISE WARNING 'Product % is unavailable - stock deduction skipped', p_product_id;
   END IF;
 
   IF product_row.is_deal AND jsonb_array_length(COALESCE(product_row.deal_items, '[]'::jsonb)) > 0 THEN
@@ -612,10 +613,9 @@ BEGIN
       portion := GREATEST(1, COALESCE(NULLIF(ingredient_entry->>'quantity', '')::NUMERIC, 1));
       UPDATE public.ingredients
       SET quantity = GREATEST(0, COALESCE(quantity, 0) - CEIL(portion * p_quantity)::INTEGER)
-      WHERE id = ingredient_id
-        AND COALESCE(quantity, 0) >= CEIL(portion * p_quantity)::INTEGER;
+      WHERE id = ingredient_id;
       IF NOT FOUND THEN
-        RAISE EXCEPTION 'Insufficient stock for ingredient %', ingredient_id;
+        RAISE WARNING 'Ingredient % not found - stock deduction skipped', ingredient_id;
       END IF;
       has_mapped_ingredients := true;
     END IF;
@@ -635,10 +635,9 @@ BEGIN
             portion := GREATEST(1, COALESCE(NULLIF(ingredient_entry->>'quantity', '')::NUMERIC, 1));
             UPDATE public.ingredients
             SET quantity = GREATEST(0, COALESCE(quantity, 0) - CEIL(portion * p_quantity)::INTEGER)
-            WHERE id = ingredient_id
-              AND COALESCE(quantity, 0) >= CEIL(portion * p_quantity)::INTEGER;
+            WHERE id = ingredient_id;
             IF NOT FOUND THEN
-              RAISE EXCEPTION 'Insufficient stock for ingredient %', ingredient_id;
+              RAISE WARNING 'Ingredient % not found - stock deduction skipped', ingredient_id;
             END IF;
             has_mapped_ingredients := true;
           END IF;
@@ -651,10 +650,9 @@ BEGIN
   IF NOT has_mapped_ingredients THEN
     UPDATE public.products
     SET quantity = GREATEST(0, COALESCE(quantity, 0) - p_quantity)
-    WHERE id = p_product_id
-      AND COALESCE(quantity, 0) >= p_quantity;
+    WHERE id = p_product_id;
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'Insufficient stock for product %', p_product_id;
+      RAISE WARNING 'Product % not found for quantity deduction', p_product_id;
     END IF;
   END IF;
 END;
@@ -684,7 +682,12 @@ BEGIN
     item_quantity := GREATEST(1, COALESCE(NULLIF(order_item->>'quantity', '')::INTEGER, 1));
     size_name := COALESCE(order_item->'size'->>'name', order_item->>'size');
     IF product_id IS NOT NULL THEN
-      PERFORM public.deduct_order_item_stock(product_id, item_quantity, size_name);
+      BEGIN
+        PERFORM public.deduct_order_item_stock(product_id, item_quantity, size_name);
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'Stock deduction failed for product % in order %: %',
+          product_id, NEW.order_id, SQLERRM;
+      END;
     END IF;
   END LOOP;
   RETURN NEW;

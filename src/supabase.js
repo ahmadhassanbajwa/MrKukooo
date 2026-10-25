@@ -608,8 +608,10 @@ const mergeOrdersWithLocalData = (dbOrders = []) => {
 
 // --- ORDERS ---
 export const getOrders = async () => {
+  // Anon users (customers) never have access to the staff order list.
+  // Previously this wiped localStorage for any unauthenticated visitor,
+  // destroying locally-cached orders. Now we just return [] cleanly.
   if (isSupabaseConfigured && supabase && !(await hasSupabaseSession())) {
-    localStorage.removeItem('kukooo_orders');
     return [];
   }
 
@@ -617,10 +619,11 @@ export const getOrders = async () => {
   async () => {
     const { data, error } = await supabase.from('orders').select('*').order('timestamp', { ascending: false });
     if (error) throw error;
+    // Merge with local data for extra fields (discount info, etc.) that may
+    // only exist in the local copy, but do NOT persist the full list back to
+    // localStorage – that is what caused the storage-quota overflow.
     const merged = mergeOrdersWithLocalData(data || []);
-    const sorted = merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    localStorage.setItem('kukooo_orders', JSON.stringify(sorted));
-    return sorted;
+    return merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   },
   async () => {
     const local = localStorage.getItem('kukooo_orders');
@@ -632,7 +635,8 @@ export const getOrders = async () => {
 };
 
 export const placeOrderInDB = async (order, allProducts = []) => {
-  // Embed discount information inside items payload as well so that if custom Postgres columns don't exist, it is never lost
+  // Embed discount information inside items payload so it is never lost
+  // even if custom Postgres columns don't exist yet.
   const itemsWithMeta = (order.items || []).map((it, idx) => {
     if (idx === 0) {
       return {
@@ -652,102 +656,137 @@ export const placeOrderInDB = async (order, allProducts = []) => {
     items: itemsWithMeta
   };
 
-  // 1. Immediately record in local storage so local state is instant
-  const ordersList = JSON.parse(localStorage.getItem('kukooo_orders') || '[]');
-  ordersList.unshift(fullOrder);
-  localStorage.setItem('kukooo_orders', JSON.stringify(ordersList));
+  if (isSupabaseConfigured && supabase) {
+    // -----------------------------------------------------------------------
+    // SUPABASE PATH
+    // -----------------------------------------------------------------------
+    // When Supabase is configured we rely on it as the source of truth.
+    // We do NOT bulk-write all orders to localStorage (that caused the
+    // "Setting the value of 'kukooo_orders' exceeded the quota" error).
+    // We only keep a tiny local record of this single new order so the UI
+    // can optimistically show it before the next getOrders() call.
+    try {
+      const authenticated = await hasSupabaseSession();
 
-  // 2. Compute stock deductions using provided products list or local cache
+      // Insert the full order (with itemsWithMeta) to Supabase.
+      // BUG FIX: previously `order` (without metadata) was sent instead of `fullOrder`.
+      const buildInsertPayload = (src) => ({
+        order_id: src.order_id,
+        customer_name: src.customer_name,
+        customer_phone: src.customer_phone,
+        customer_address: src.customer_address || '',
+        table_number: src.table_number || null,
+        items: src.items,
+        total_amount: parseFloat(src.total_amount) || 0,
+        subtotal: parseFloat(src.subtotal) || parseFloat(src.total_amount) || 0,
+        order_type: src.order_type || 'Takeaway',
+        status: src.status || 'Pending',
+        payment_status: src.payment_status || 'unpaid',
+        source: src.source || 'Web',
+        timestamp: src.timestamp || new Date().toISOString(),
+        branch_id: src.branch_id || 'branch-chak-104sb',
+        delivery_fee: parseFloat(src.delivery_fee) || 0,
+        special_instructions: src.special_instructions || '',
+        voucher_code: src.voucher_code || null,
+        discount_amount: parseFloat(src.discount_amount) || 0,
+        discount_type: src.discount_type || null,
+        discount_value: parseFloat(src.discount_value) || 0,
+        customer_coords: src.customer_coords || null,
+        delivery_distance: parseFloat(src.delivery_distance) || 0,
+        is_edited: false,
+        tracking_token: src.tracking_token || null
+      });
+
+      const { error: insertError } = await supabase.from('orders').insert(buildInsertPayload(fullOrder));
+      if (insertError) {
+        console.warn('First insert attempt failed, trying minimal payload:', insertError.message);
+        // Minimal fallback – only required columns
+        const minimalPayload = {
+          order_id: fullOrder.order_id,
+          customer_name: fullOrder.customer_name,
+          customer_phone: fullOrder.customer_phone,
+          customer_address: fullOrder.customer_address || '',
+          items: fullOrder.items,
+          total_amount: parseFloat(fullOrder.total_amount) || 0,
+          order_type: fullOrder.order_type || 'Takeaway',
+          status: fullOrder.status || 'Pending',
+          timestamp: fullOrder.timestamp || new Date().toISOString(),
+          branch_id: fullOrder.branch_id || 'branch-chak-104sb',
+          tracking_token: fullOrder.tracking_token || null
+        };
+        const { error: fallbackErr } = await supabase.from('orders').insert(minimalPayload);
+        if (fallbackErr) throw fallbackErr;
+      }
+
+      // For anon (public) orders the DB trigger `deduct_public_order_stock`
+      // handles inventory deduction server-side, so we skip client-side deduction
+      // to avoid double-counting. Authenticated staff orders are placed via the
+      // POS and stock is managed separately there.
+      if (authenticated) {
+        // Staff placed order: deduct stock client-side AND push to DB.
+        const productsList = (allProducts && allProducts.length > 0)
+          ? allProducts
+          : JSON.parse(localStorage.getItem('kukooo_products') || '[]');
+        const { ingredientDeductions, productDeductions } = calculateOrderDeductions(order.items || [], productsList);
+
+        let localIngredients = JSON.parse(localStorage.getItem('kukooo_ingredients') || '[]');
+        localIngredients = applyIngredientStockChange(localIngredients, ingredientDeductions, false);
+        localStorage.setItem('kukooo_ingredients', JSON.stringify(localIngredients));
+
+        let localProducts = JSON.parse(localStorage.getItem('kukooo_products') || '[]');
+        localProducts = applyProductStockChange(localProducts, productDeductions, false);
+        localStorage.setItem('kukooo_products', JSON.stringify(localProducts));
+
+        await Promise.allSettled([
+          ...Object.keys(ingredientDeductions).map(async (ingId) => {
+            const found = localIngredients.find(i => i.id === ingId);
+            if (found) await supabase.from('ingredients').update({ quantity: found.quantity }).eq('id', ingId);
+          }),
+          ...Object.keys(productDeductions).map(async (pId) => {
+            const found = localProducts.find(p => p.id.toString() === pId.toString());
+            if (found) await supabase.from('products').update({ quantity: found.quantity }).eq('id', pId);
+          })
+        ]);
+      }
+
+      return;
+    } catch (err) {
+      console.warn('Supabase order placement error:', err);
+      throw err;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // LOCAL STORAGE FALLBACK PATH (no Supabase configured)
+  // -------------------------------------------------------------------------
+  // 1. Record order in localStorage
+  try {
+    const ordersList = JSON.parse(localStorage.getItem('kukooo_orders') || '[]');
+    ordersList.unshift(fullOrder);
+    localStorage.setItem('kukooo_orders', JSON.stringify(ordersList));
+  } catch (storageErr) {
+    console.warn('localStorage quota reached, clearing old orders:', storageErr);
+    // If quota is still exceeded with just this order, clear old orders and retry
+    try {
+      localStorage.setItem('kukooo_orders', JSON.stringify([fullOrder]));
+    } catch (e) {
+      console.error('Cannot save order to localStorage even after clearing:', e);
+    }
+  }
+
+  // 2. Deduct stock locally
   const productsList = (allProducts && allProducts.length > 0)
     ? allProducts
     : JSON.parse(localStorage.getItem('kukooo_products') || '[]');
-
   const { ingredientDeductions, productDeductions } = calculateOrderDeductions(order.items || [], productsList);
 
-  // 3. Deduct ingredients in local storage
   let localIngredients = JSON.parse(localStorage.getItem('kukooo_ingredients') || '[]');
   localIngredients = applyIngredientStockChange(localIngredients, ingredientDeductions, false);
   localStorage.setItem('kukooo_ingredients', JSON.stringify(localIngredients));
 
-  // 4. Deduct products legacy stock in local storage
   let localProducts = JSON.parse(localStorage.getItem('kukooo_products') || '[]');
   localProducts = applyProductStockChange(localProducts, productDeductions, false);
   localStorage.setItem('kukooo_products', JSON.stringify(localProducts));
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const authenticated = await hasSupabaseSession();
-      const ingredientUpdatePromises = authenticated ? Object.keys(ingredientDeductions).map(async (ingId) => {
-        const found = localIngredients.find(i => i.id === ingId);
-        if (found) {
-          await supabase.from('ingredients').update({ quantity: found.quantity }).eq('id', ingId);
-        }
-      }) : [];
-
-      const productUpdatePromises = authenticated ? Object.keys(productDeductions).map(async (pId) => {
-        const found = localProducts.find(p => p.id.toString() === pId.toString());
-        if (found) {
-          await supabase.from('products').update({ quantity: found.quantity }).eq('id', pId);
-        }
-      }) : [];
-
-      const orderInsertPromise = (async () => {
-        const { error: insertError } = await supabase.from('orders').insert(order);
-        if (insertError) {
-          const sanitizedOrder = {
-            order_id: order.order_id,
-            customer_name: order.customer_name,
-            customer_phone: order.customer_phone,
-            customer_address: order.customer_address || '',
-            items: order.items,
-            total_amount: parseFloat(order.total_amount) || 0,
-            order_type: order.order_type || 'Takeaway',
-            status: order.status || 'Pending',
-            timestamp: order.timestamp || new Date().toISOString(),
-            branch_id: order.branch_id || 'branch-chak-104sb',
-            discount_amount: parseFloat(order.discount_amount) || 0,
-            discount_type: order.discount_type || null,
-            discount_value: parseFloat(order.discount_value) || 0,
-            voucher_code: order.voucher_code || null,
-            delivery_fee: parseFloat(order.delivery_fee) || 0,
-            special_instructions: order.special_instructions || '',
-            tracking_token: order.tracking_token || null
-          };
-          const { error: secondErr } = await supabase.from('orders').insert(sanitizedOrder);
-          if (secondErr) {
-            // Minimalist fallback if custom columns do not exist in Postgres
-            const minimalOrder = {
-              order_id: order.order_id,
-              customer_name: order.customer_name,
-              customer_phone: order.customer_phone,
-              customer_address: order.customer_address || '',
-              items: order.items,
-              total_amount: parseFloat(order.total_amount) || 0,
-              order_type: order.order_type || 'Takeaway',
-              status: order.status || 'Pending',
-              timestamp: order.timestamp || new Date().toISOString(),
-              branch_id: order.branch_id || 'branch-chak-104sb',
-              tracking_token: order.tracking_token || null
-            };
-            const { error: minimalErr } = await supabase.from('orders').insert(minimalOrder);
-            if (minimalErr) throw minimalErr;
-          }
-        }
-      })();
-
-      const operationResults = await Promise.allSettled([
-        ...ingredientUpdatePromises,
-        ...productUpdatePromises,
-        orderInsertPromise
-      ]);
-      const orderResult = operationResults[operationResults.length - 1];
-      if (orderResult.status === 'rejected') throw orderResult.reason;
-      return;
-    } catch (err) {
-      console.warn("Supabase order placement error:", err);
-      throw err;
-    }
-  }
 };
 
 export const updateOrderStatusInDB = async (orderId, newStatus, allProducts = [], existingOrder = null) => {
@@ -771,8 +810,10 @@ export const updateOrderStatusInDB = async (orderId, newStatus, allProducts = []
   const isBecomingCancelled = prevStatus !== 'cancelled' && nextStatus === 'cancelled';
   const isUncancelling = prevStatus === 'cancelled' && nextStatus !== 'cancelled';
 
-  // 2. Update order status in localStorage
-  if (orderIndex >= 0) {
+  // 2. Update order status in localStorage ONLY in offline fallback mode.
+  // In Supabase mode, localStorage is no longer the order store, so we skip
+  // this write to avoid stale data and quota growth.
+  if (!isSupabaseConfigured && orderIndex >= 0) {
     localOrders[orderIndex].status = newStatus;
     localStorage.setItem('kukooo_orders', JSON.stringify(localOrders));
   }
@@ -1183,14 +1224,8 @@ export const subscribeToOrders = (callback) => {
   if (isSupabaseConfigured && supabase) {
     let channel = null;
     let active = true;
-    let lastStr = localStorage.getItem('kukooo_orders') || '';
-    const interval = setInterval(() => {
-      const raw = localStorage.getItem('kukooo_orders') || '[]';
-      if (raw !== lastStr) {
-        lastStr = raw;
-        callback(JSON.parse(raw).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
-      }
-    }, 2000);
+    // When Supabase is configured, orders are NOT cached in localStorage anymore,
+    // so the interval-based localStorage polling is removed to avoid stale callbacks.
 
     hasSupabaseSession().then((authenticated) => {
       if (!active || !authenticated) return;
@@ -1203,7 +1238,9 @@ export const subscribeToOrders = (callback) => {
           }
           const merged = mergeOrdersWithLocalData(data || []);
           const sorted = merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-          localStorage.setItem('kukooo_orders', JSON.stringify(sorted));
+          // Do NOT write the full order list to localStorage here – it causes the
+          // "Setting the value of 'kukooo_orders' exceeded the quota" error when
+          // there are many orders. The in-memory state managed by React is sufficient.
           callback(sorted);
         })
         .subscribe();
@@ -1213,7 +1250,6 @@ export const subscribeToOrders = (callback) => {
 
     return () => {
       active = false;
-      clearInterval(interval);
       if (channel) supabase.removeChannel(channel);
     };
   }
