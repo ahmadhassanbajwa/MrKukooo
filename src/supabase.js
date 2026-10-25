@@ -607,6 +607,28 @@ const mergeOrdersWithLocalData = (dbOrders = []) => {
 };
 
 // --- ORDERS ---
+const fetchAllOrdersFromSupabase = async () => {
+  const pageSize = 1000;
+  const orders = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .order('order_id', { ascending: false })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+    const page = data || [];
+    orders.push(...page);
+    if (page.length < pageSize) break;
+  }
+
+  return mergeOrdersWithLocalData(orders)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+};
+
 export const getOrders = async () => {
   // Anon users (customers) never have access to the staff order list.
   // Previously this wiped localStorage for any unauthenticated visitor,
@@ -615,23 +637,14 @@ export const getOrders = async () => {
     return [];
   }
 
-  return runDbOperation(
-  async () => {
-    const { data, error } = await supabase.from('orders').select('*').order('timestamp', { ascending: false });
-    if (error) throw error;
-    // Merge with local data for extra fields (discount info, etc.) that may
-    // only exist in the local copy, but do NOT persist the full list back to
-    // localStorage – that is what caused the storage-quota overflow.
-    const merged = mergeOrdersWithLocalData(data || []);
-    return merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  },
-  async () => {
-    const local = localStorage.getItem('kukooo_orders');
-    if (local) return JSON.parse(local).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    localStorage.setItem('kukooo_orders', JSON.stringify(INITIAL_ORDERS));
-    return INITIAL_ORDERS;
+  if (isSupabaseConfigured && supabase) {
+    return fetchAllOrdersFromSupabase();
   }
-  );
+
+  const local = localStorage.getItem('kukooo_orders');
+  if (local) return JSON.parse(local).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  localStorage.setItem('kukooo_orders', JSON.stringify(INITIAL_ORDERS));
+  return INITIAL_ORDERS;
 };
 
 export const placeOrderInDB = async (order, allProducts = []) => {
@@ -1231,17 +1244,11 @@ export const subscribeToOrders = (callback) => {
       if (!active || !authenticated) return;
       channel = supabase.channel('public:orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async () => {
-          const { data, error } = await supabase.from('orders').select('*');
-          if (error) {
+          try {
+            callback(await fetchAllOrdersFromSupabase());
+          } catch (error) {
             console.error('Could not refresh staff orders:', error);
-            return;
           }
-          const merged = mergeOrdersWithLocalData(data || []);
-          const sorted = merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-          // Do NOT write the full order list to localStorage here – it causes the
-          // "Setting the value of 'kukooo_orders' exceeded the quota" error when
-          // there are many orders. The in-memory state managed by React is sufficient.
-          callback(sorted);
         })
         .subscribe();
     }).catch((error) => {
