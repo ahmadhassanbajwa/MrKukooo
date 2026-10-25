@@ -908,6 +908,9 @@ export default function App() {
           <Suspense fallback={<ViewLoader />}>
             <EmployeeDashboard 
               orders={orders}
+              ordersLoadStatus={ordersLoadStatus}
+              ordersLoadError={ordersLoadError}
+              refreshOrders={refreshOrders}
               products={products}
               categories={categories}
               branches={branches}

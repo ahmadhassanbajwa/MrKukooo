@@ -17,7 +17,8 @@ import {
   Package,
   ShoppingBag as ShoppingBagIcon,
   Utensils,
-  Printer
+  Printer,
+  RotateCcw
 } from 'lucide-react';
 import { getWhatsAppLink } from '../../utils/whatsapp';
 import { printReceipt } from '../../utils/printReceipt';
@@ -52,6 +53,9 @@ const getRelativeTime = (isoString, currentTime) => {
 
 export default function EmployeeDashboard({ 
   orders = [], 
+  ordersLoadStatus = 'loaded',
+  ordersLoadError = '',
+  refreshOrders,
   products = [], 
   branches = [],
   updateOrderStatus, 
@@ -225,6 +229,18 @@ export default function EmployeeDashboard({
           </div>
 
           <button
+            type="button"
+            onClick={refreshOrders}
+            disabled={ordersLoadStatus === 'loading'}
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-medium text-xs rounded-md shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+            title="Refresh live orders from the database"
+            aria-label="Refresh live orders"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${ordersLoadStatus === 'loading' ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{ordersLoadStatus === 'loading' ? 'Refreshing...' : 'Refresh Orders'}</span>
+          </button>
+
+          <button
             onClick={navigateToPOS}
             className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 bg-secondary text-accent hover:bg-secondary-hover font-medium text-xs rounded-md shadow-2xs cursor-pointer active:translate-y-[0.5px] border border-secondary-hover/40"
             title="Open POS System"
@@ -266,6 +282,23 @@ export default function EmployeeDashboard({
 
       {activeTab === 'orders' ? (
         <>
+          {ordersLoadStatus === 'error' && (
+            <div role="alert" className="mx-auto mt-4 flex max-w-6xl flex-col gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800 sm:flex-row sm:items-center sm:justify-between">
+              <span><strong className="font-black">Live order refresh failed.</strong> {ordersLoadError}</span>
+              <button
+                type="button"
+                onClick={refreshOrders}
+                className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 font-black hover:bg-red-100"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Retry
+              </button>
+            </div>
+          )}
+          {ordersLoadStatus === 'loading' && (
+            <div role="status" className="mx-auto mt-4 max-w-6xl rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
+              Refreshing orders from the database...
+            </div>
+          )}
           {/* ACCORDION SECTIONS */}
           <main className="flex-grow p-4 md:p-6 max-w-6xl w-full mx-auto space-y-4">
         {columns.map((col) => {
