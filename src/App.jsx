@@ -39,7 +39,7 @@ import {
   updateIngredientStock,
   subscribeToIngredients,
   getArchivedAnalytics,
-  archiveAndPurgeOrders,
+  archiveOrderAnalytics,
   deleteArchivedAnalytics,
   clearAllArchivedAnalytics,
   getFoodWastage,
@@ -305,9 +305,9 @@ export default function App() {
   };
 
   // --- OPTIMISTIC OPERATIONS API ---
-  const handleArchiveAndPurgeOrders = async (params) => {
+  const handleArchiveOrderAnalytics = async (params) => {
     try {
-      const result = await archiveAndPurgeOrders(params);
+      const result = await archiveOrderAnalytics(params);
       // Refresh archives and orders optimistically
       const ordersRequestVersion = ++ordersFetchVersion.current;
       const [newOrds, newArchs] = await Promise.all([getOrders(), getArchivedAnalytics()]);
@@ -315,7 +315,7 @@ export default function App() {
       setArchivedAnalytics(newArchs);
       return result;
     } catch (err) {
-      console.error("Failed to archive and purge orders:", err);
+      console.error("Failed to archive order analytics:", err);
       throw err;
     }
   };
@@ -786,7 +786,7 @@ export default function App() {
               offers={offers}
               orders={orders}
               archivedAnalytics={archivedAnalytics}
-              archiveAndPurgeOrders={handleArchiveAndPurgeOrders}
+              archiveOrderAnalytics={handleArchiveOrderAnalytics}
               addons={addons}
               saveAddon={handleSaveAddon}
               deleteAddon={handleDeleteAddon}

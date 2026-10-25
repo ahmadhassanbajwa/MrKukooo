@@ -45,6 +45,12 @@ export default function DashboardAnalytics({
     if (endDate && arch.start_date > endDate) return false;
     return true;
   });
+  const archivedOrderIds = new Set(
+    filteredArchives.flatMap(archive =>
+      Array.isArray(archive.order_ids) ? archive.order_ids.map(String) : []
+    )
+  );
+  const ordersForAnalytics = filteredOrders.filter(order => !archivedOrderIds.has(String(order.order_id)));
 
   // Filter food wastage events overlapping selected range & branch
   const filteredWastage = (foodWastage || []).filter(w => {
@@ -59,7 +65,7 @@ export default function DashboardAnalytics({
   const totalWastageCost = filteredWastage.reduce((sum, w) => sum + (Number(w.total_cost) || ((Number(w.quantity) || 0) * (Number(w.unit_cost) || 0)) || 0), 0);
   const totalWastageCount = filteredWastage.reduce((sum, w) => sum + (Number(w.quantity) || 0), 0);
 
-  const nonCancelledOrders = filteredOrders.filter(o => (o.status || '').toLowerCase() !== 'cancelled');
+  const nonCancelledOrders = ordersForAnalytics.filter(o => (o.status || '').toLowerCase() !== 'cancelled');
 
   let totalRevenue = 0;
   let totalCost = 0;
@@ -226,9 +232,9 @@ export default function DashboardAnalytics({
   const pendingOrders = nonCancelledOrders.filter(o => (o.status || '').toLowerCase() === 'pending').length;
   const completedOrders = nonCancelledOrders.filter(o => (o.status || '').toLowerCase() === 'completed').length + archivedCompletedCount;
   
-  const liveCancelledCount = filteredOrders.length - nonCancelledOrders.length;
+  const liveCancelledCount = ordersForAnalytics.length - nonCancelledOrders.length;
   const cancelledOrdersCount = liveCancelledCount + archivedCancelledCount;
-  const totalAllAttempts = (filteredOrders.length + archivedCompletedCount + archivedCancelledCount);
+  const totalAllAttempts = (ordersForAnalytics.length + archivedCompletedCount + archivedCancelledCount);
   const cancellationRate = totalAllAttempts > 0 ? Math.round((cancelledOrdersCount / totalAllAttempts) * 100) : 0;
   const avgOrderValue = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
 

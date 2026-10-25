@@ -32,7 +32,7 @@ export default function ManagerDashboard({
   offers = [],
   orders = [],
   archivedAnalytics = [],
-  archiveAndPurgeOrders,
+  archiveOrderAnalytics,
   addons = [],
   saveAddon,
   deleteAddon,
@@ -79,7 +79,7 @@ export default function ManagerDashboard({
             orders={orders}
             updateOrderStatus={updateOrderStatus}
             deleteOrder={deleteOrder}
-            archiveAndPurgeOrders={archiveAndPurgeOrders}
+            archiveOrderAnalytics={archiveOrderAnalytics}
             branches={branches}
             archivedAnalytics={archivedAnalytics}
             deleteArchivedAnalytics={deleteArchivedAnalytics}

@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS public.homepage_sections_doc (
     sections JSONB DEFAULT '[]'::jsonb
 );
 
--- 11. Order Analytics Archives (Historical Summaries for Purged Orders)
+-- 11. Order Analytics Archives (Historical Summaries Linked to Retained Orders)
 CREATE TABLE IF NOT EXISTS public.order_analytics_archives (
     id TEXT PRIMARY KEY,
     start_date TEXT NOT NULL,
@@ -164,6 +164,9 @@ CREATE TABLE IF NOT EXISTS public.order_analytics_archives (
     item_breakdown JSONB DEFAULT '[]'::jsonb,
     archived_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
+
+ALTER TABLE public.order_analytics_archives
+  ADD COLUMN IF NOT EXISTS order_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- Tables used by the application but not defined in earlier schema versions
 CREATE TABLE IF NOT EXISTS public.vouchers (

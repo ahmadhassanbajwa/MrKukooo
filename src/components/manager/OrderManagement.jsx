@@ -7,7 +7,7 @@ export default function OrderManagement({
   orders, 
   updateOrderStatus, 
   deleteOrder, 
-  archiveAndPurgeOrders, 
+  archiveOrderAnalytics,
   branches = [],
   archivedAnalytics = [],
   deleteArchivedAnalytics,
@@ -20,6 +20,9 @@ export default function OrderManagement({
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const legacyArchiveCount = archivedAnalytics.filter(
+    archive => !Array.isArray(archive.order_ids) || archive.order_ids.length === 0
+  ).length;
 
   // Archive Modal State
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -199,12 +202,18 @@ export default function OrderManagement({
 
   const ordersToArchive = useMemo(() => {
     if (!archiveStartDate || !archiveEndDate) return [];
+    const archivedOrderIds = new Set(
+      archivedAnalytics.flatMap(archive =>
+        Array.isArray(archive.order_ids) ? archive.order_ids.map(String) : []
+      )
+    );
     return (orders || []).filter(o => {
+      if (archivedOrderIds.has(String(o.order_id))) return false;
       if (archiveBranch !== 'All' && o.branch_id !== archiveBranch) return false;
       const orderDate = o.timestamp ? o.timestamp.split('T')[0] : '';
       return orderDate >= archiveStartDate && orderDate <= archiveEndDate;
     });
-  }, [orders, archiveStartDate, archiveEndDate, archiveBranch]);
+  }, [orders, archivedAnalytics, archiveStartDate, archiveEndDate, archiveBranch]);
 
   const archiveGrossRevenue = useMemo(() => {
     return ordersToArchive.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
@@ -216,20 +225,20 @@ export default function OrderManagement({
       return;
     }
     const confirmed = window.confirm(
-      `Are you sure you want to archive ${ordersToArchive.length} orders (Total: Rs. ${archiveGrossRevenue.toFixed(2)})?\n\nThis will permanently save their full revenue & profit analytics into the historical rollup ledger and delete the raw order rows from database storage.`
+      `Are you sure you want to archive analytics for ${ordersToArchive.length} orders (Total: Rs. ${archiveGrossRevenue.toFixed(2)})?\n\nThe orders will remain in the Orders Ledger and in the database. Their analytics will be rolled up so they are not counted twice.`
     );
     if (!confirmed) return;
 
     setIsArchiving(true);
     try {
-      if (archiveAndPurgeOrders) {
-        const res = await archiveAndPurgeOrders({
+      if (archiveOrderAnalytics) {
+        const res = await archiveOrderAnalytics({
           startDate: archiveStartDate,
           endDate: archiveEndDate,
           branchId: archiveBranch,
           ordersToArchive
         });
-        setArchiveSuccessMessage(`Successfully archived ${res.count} orders. Analytics preserved and database storage freed.`);
+        setArchiveSuccessMessage(`Archived analytics for ${res.count} orders. The original order records remain available in the ledger.`);
         setTimeout(() => {
           setArchiveSuccessMessage(null);
           setIsArchiveModalOpen(false);
@@ -280,6 +289,12 @@ export default function OrderManagement({
           ))}
         </div>
       </div>
+
+      {legacyArchiveCount > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
+          {legacyArchiveCount} older archive{legacyArchiveCount === 1 ? ' contains' : 's contain'} summarized analytics only. The previous archive process deleted the original order records, so those individual orders cannot be restored from these summaries. New archives keep order records in this ledger.
+        </div>
+      )}
 
       {/* Main Filter & Search Control Panel */}
       <div className="space-y-3">
@@ -363,10 +378,10 @@ export default function OrderManagement({
             <button
               onClick={() => setIsArchiveModalOpen(true)}
               className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3.5 py-2 rounded-2xl text-xs font-black transition-all cursor-pointer shadow-sm ml-auto"
-              title="Archive and purge old orders to save database space"
+              title="Roll up analytics for older orders while keeping their records"
             >
               <Archive className="w-3.5 h-3.5 text-blue-600" />
-              Archive & Cleanup
+              Archive Analytics
             </button>
           </div>
         </div>
@@ -530,7 +545,7 @@ export default function OrderManagement({
         </table>
       </div>
 
-      {/* ARCHIVE & STORAGE CLEANUP MODAL */}
+      {/* ORDER ANALYTICS ARCHIVE MODAL */}
       {isArchiveModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-3xl comic-border comic-shadow max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
@@ -540,8 +555,8 @@ export default function OrderManagement({
                   <Archive className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-accent">Archive & Purge Old Orders</h3>
-                  <p className="text-[11px] font-bold text-gray-400">Free database storage while keeping analytics permanent</p>
+                  <h3 className="text-base font-black text-accent">Archive Old Order Analytics</h3>
+                  <p className="text-[11px] font-bold text-gray-400">Summarize analytics while keeping every order record</p>
                 </div>
               </div>
               <button
@@ -762,7 +777,7 @@ export default function OrderManagement({
                   <div className="bg-yellow-50/60 border border-yellow-300 p-4 rounded-2xl space-y-2">
                     <h4 className="text-[10px] font-black uppercase text-yellow-800 tracking-wider">Archival Preview</h4>
                     <div className="flex justify-between items-center text-xs">
-                      <span className="text-gray-600">Orders to be purged:</span>
+                      <span className="text-gray-600">Orders to summarize:</span>
                       <span className="font-black text-accent text-sm">{ordersToArchive.length} orders</span>
                     </div>
                     <div className="flex justify-between items-center text-xs">
@@ -795,12 +810,12 @@ export default function OrderManagement({
                   {isArchiving ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Archiving & Purging...
+                      Archiving Analytics...
                     </>
                   ) : (
                     <>
                       <Archive className="w-4 h-4" />
-                      Archive & Purge ({ordersToArchive.length})
+                      Archive Analytics ({ordersToArchive.length})
                     </>
                   )}
                 </button>

@@ -910,7 +910,7 @@ export const deleteOrderInDB = async (orderId) => runDbOperation(
   }
 );
 
-// --- ORDER ANALYTICS ARCHIVES & PURGE ---
+// --- ORDER ANALYTICS ARCHIVES ---
 export const getArchivedAnalytics = async () => runDbOperation(
   async () => {
     const { data, error } = await supabase.from('order_analytics_archives').select('*');
@@ -926,7 +926,7 @@ export const getArchivedAnalytics = async () => runDbOperation(
   }
 );
 
-export const archiveAndPurgeOrders = async ({ startDate, endDate, branchId = 'All', ordersToArchive = [] }) => {
+export const archiveOrderAnalytics = async ({ startDate, endDate, branchId = 'All', ordersToArchive = [] }) => {
   if (!ordersToArchive || ordersToArchive.length === 0) return { count: 0, archiveId: null };
 
   const totalOrders = ordersToArchive.length;
@@ -987,37 +987,23 @@ export const archiveAndPurgeOrders = async ({ startDate, endDate, branchId = 'Al
     total_delivery_fees: totalDeliveryFees,
     order_types: orderTypes,
     item_breakdown: itemBreakdown,
+    order_ids: ordersToArchive.map(order => String(order.order_id)),
     archived_at: new Date().toISOString()
   };
 
-  // Step 1: Save archive record
-  await runDbOperation(
-    async () => {
-      const { error } = await supabase.from('order_analytics_archives').upsert(archivePayload);
-      if (error) throw error;
-    },
-    async () => {
-      const archives = JSON.parse(localStorage.getItem('kukooo_order_archives') || '[]');
-      archives.push(archivePayload);
-      localStorage.setItem('kukooo_order_archives', JSON.stringify(archives));
+  if (isSupabaseConfigured && supabase) {
+    if (await getAuthenticatedStaffRole() !== 'manager') {
+      throw new Error('Only an authenticated manager can archive order analytics.');
     }
-  );
+    const { error } = await supabase.from('order_analytics_archives').upsert(archivePayload);
+    if (error) throw error;
+  } else {
+    const archives = JSON.parse(localStorage.getItem('kukooo_order_archives') || '[]');
+    archives.push(archivePayload);
+    localStorage.setItem('kukooo_order_archives', JSON.stringify(archives));
+  }
 
-  // Step 2: Delete raw orders from DB
-  const orderIdsToDelete = ordersToArchive.map(o => o.order_id);
-  await runDbOperation(
-    async () => {
-      const { error } = await supabase.from('orders').delete().in('order_id', orderIdsToDelete);
-      if (error) throw error;
-    },
-    async () => {
-      const currentOrders = JSON.parse(localStorage.getItem('kukooo_orders') || '[]');
-      const remainingOrders = currentOrders.filter(o => !orderIdsToDelete.includes(o.order_id));
-      localStorage.setItem('kukooo_orders', JSON.stringify(remainingOrders));
-    }
-  );
-
-  return { count: orderIdsToDelete.length, archiveId };
+  return { count: ordersToArchive.length, archiveId };
 };
 
 export const deleteArchivedAnalytics = async (archiveId) => {
