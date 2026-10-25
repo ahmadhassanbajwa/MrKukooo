@@ -31,6 +31,9 @@ export default function ManagerDashboard({
   products = [],
   offers = [],
   orders = [],
+  ordersLoadStatus = 'loaded',
+  ordersLoadError = '',
+  refreshOrders,
   archivedAnalytics = [],
   archiveOrderAnalytics,
   addons = [],
@@ -77,6 +80,9 @@ export default function ManagerDashboard({
         return (
           <OrderManagement
             orders={orders}
+            ordersLoadStatus={ordersLoadStatus}
+            ordersLoadError={ordersLoadError}
+            refreshOrders={refreshOrders}
             updateOrderStatus={updateOrderStatus}
             deleteOrder={deleteOrder}
             archiveOrderAnalytics={archiveOrderAnalytics}

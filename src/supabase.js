@@ -608,7 +608,10 @@ const mergeOrdersWithLocalData = (dbOrders = []) => {
 
 // --- ORDERS ---
 const fetchAllOrdersFromSupabase = async () => {
-  if (!(await getAuthenticatedStaffRole())) return null;
+  const staffRole = await getAuthenticatedStaffRole();
+  if (!staffRole) {
+    throw new Error('Your staff session is not authorized to read orders. Sign in again and verify the staff role in Supabase.');
+  }
 
   const pageSize = 1000;
   const orders = [];
@@ -626,8 +629,6 @@ const fetchAllOrdersFromSupabase = async () => {
     orders.push(...page);
     if (page.length < pageSize) break;
   }
-
-  if (!(await getAuthenticatedStaffRole())) return null;
 
   return mergeOrdersWithLocalData(orders)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -808,10 +809,12 @@ export const updateOrderStatusInDB = async (orderId, newStatus, allProducts = []
   // Fallback query to Supabase if order is missing locally
   if (!targetOrder && isSupabaseConfigured && supabase) {
     try {
-      const { data } = await supabase.from('orders').select('*').eq('order_id', orderId).maybeSingle();
+      const { data, error } = await supabase.from('orders').select('*').eq('order_id', orderId).maybeSingle();
+      if (error) throw error;
       if (data) targetOrder = data;
     } catch (e) {
-      console.warn("Could not fetch order from Supabase:", e);
+      console.error("Could not fetch order from Supabase:", e);
+      throw e;
     }
   }
 
@@ -855,76 +858,94 @@ export const updateOrderStatusInDB = async (orderId, newStatus, allProducts = []
   // 4. Persist to Supabase if configured
   if (isSupabaseConfigured && supabase) {
     try {
-      const orderUpdatePromise = (async () => {
-        await supabase.from('orders').update({ status: newStatus }).eq('order_id', orderId);
-      })();
+      const { data: updatedOrder, error: orderUpdateError } = await supabase
+        .from('orders')
+        .update({ status: newStatus })
+        .eq('order_id', orderId)
+        .select('order_id')
+        .maybeSingle();
+      if (orderUpdateError) throw orderUpdateError;
+      if (!updatedOrder) throw new Error(`Order ${orderId} was not updated. Check the staff role and orders_staff_update policy.`);
 
-      const promises = [orderUpdatePromise];
+      const stockUpdates = [];
 
       if (targetOrder && (isBecomingCancelled || isUncancelling)) {
-        // Parallel stock updates for ingredients
-        const ingPromises = Object.keys(ingredientDeductions).map(async (ingId) => {
+        stockUpdates.push(...Object.keys(ingredientDeductions).map(async (ingId) => {
           const found = localIngredients.find(i => String(i.id) === String(ingId));
           if (found) {
-            await supabase.from('ingredients').update({ quantity: found.quantity }).eq('id', String(ingId));
+            const { error } = await supabase.from('ingredients').update({ quantity: found.quantity }).eq('id', String(ingId));
+            if (error) throw error;
           }
-        });
+        }));
 
-        // Parallel stock updates for products
-        const prodPromises = Object.keys(productDeductions).map(async (pId) => {
+        stockUpdates.push(...Object.keys(productDeductions).map(async (pId) => {
           const found = localProducts.find(p => String(p.id) === String(pId));
           if (found) {
-            await supabase.from('products').update({ quantity: found.quantity }).eq('id', String(pId));
+            const { error } = await supabase.from('products').update({ quantity: found.quantity }).eq('id', String(pId));
+            if (error) throw error;
           }
-        });
-
-        promises.push(...ingPromises, ...prodPromises);
+        }));
       }
 
-      await Promise.allSettled(promises);
+      await Promise.all(stockUpdates);
     } catch (err) {
       console.warn("Supabase order status update error:", err);
+      throw err;
     }
   }
 };
 
-export const updateOrderDetailsInDB = async (orderId, updatedItems, newTotal, extraFields = {}) => runDbOperation(
-  async () => {
-    await supabase.from('orders').update({ items: updatedItems, total_amount: parseFloat(newTotal), ...extraFields }).eq('order_id', orderId);
-  },
-  async () => {
-    const list = await getOrders();
-    const index = list.findIndex(o => o.order_id === orderId);
-    if (index >= 0) {
-      list[index].items = updatedItems; list[index].total_amount = parseFloat(newTotal);
-      Object.assign(list[index], extraFields); localStorage.setItem('kukooo_orders', JSON.stringify(list));
-    }
+export const updateOrderDetailsInDB = async (orderId, updatedItems, newTotal, extraFields = {}) => {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ items: updatedItems, total_amount: parseFloat(newTotal), ...extraFields })
+      .eq('order_id', orderId)
+      .select('order_id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error(`Order ${orderId} was not updated. Check the staff role and orders_staff_update policy.`);
+    return;
   }
-);
 
-export const deleteOrderInDB = async (orderId) => runDbOperation(
-  async () => { await supabase.from('orders').delete().eq('order_id', orderId); },
-  async () => {
-    const list = await getOrders();
-    localStorage.setItem('kukooo_orders', JSON.stringify(list.filter(o => o.order_id !== orderId)));
+  const list = await getOrders();
+  const index = list.findIndex(o => o.order_id === orderId);
+  if (index >= 0) {
+    list[index].items = updatedItems;
+    list[index].total_amount = parseFloat(newTotal);
+    Object.assign(list[index], extraFields);
+    localStorage.setItem('kukooo_orders', JSON.stringify(list));
   }
-);
+};
+
+export const deleteOrderInDB = async (orderId) => {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase
+      .from('orders')
+      .delete()
+      .eq('order_id', orderId)
+      .select('order_id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error(`Order ${orderId} was not deleted. Only a manager can delete orders.`);
+    return;
+  }
+
+  const list = await getOrders();
+  localStorage.setItem('kukooo_orders', JSON.stringify(list.filter(o => o.order_id !== orderId)));
+};
 
 // --- ORDER ANALYTICS ARCHIVES ---
-export const getArchivedAnalytics = async () => runDbOperation(
-  async () => {
+export const getArchivedAnalytics = async () => {
+  if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase.from('order_analytics_archives').select('*');
-    if (error) {
-      console.warn("Could not fetch order_analytics_archives:", error);
-      return [];
-    }
+    if (error) throw error;
     return data || [];
-  },
-  async () => {
-    const local = localStorage.getItem('kukooo_order_archives');
-    return local ? JSON.parse(local) : [];
   }
-);
+
+  const local = localStorage.getItem('kukooo_order_archives');
+  return local ? JSON.parse(local) : [];
+};
 
 export const archiveOrderAnalytics = async ({ startDate, endDate, branchId = 'All', ordersToArchive = [] }) => {
   if (!ordersToArchive || ordersToArchive.length === 0) return { count: 0, archiveId: null };
@@ -1007,29 +1028,31 @@ export const archiveOrderAnalytics = async ({ startDate, endDate, branchId = 'Al
 };
 
 export const deleteArchivedAnalytics = async (archiveId) => {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase
+      .from('order_analytics_archives')
+      .delete()
+      .eq('id', archiveId)
+      .select('id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error(`Archive ${archiveId} was not deleted. Verify the manager role and archives_manager_access policy.`);
+    return;
+  }
+
   const localArchives = JSON.parse(localStorage.getItem('kukooo_order_archives') || '[]');
   const updated = localArchives.filter(a => a.id !== archiveId);
   localStorage.setItem('kukooo_order_archives', JSON.stringify(updated));
-
-  return runDbOperation(
-    async () => {
-      const { error } = await supabase.from('order_analytics_archives').delete().eq('id', archiveId);
-      if (error) console.warn("Could not delete from order_analytics_archives:", error);
-    },
-    async () => {}
-  );
 };
 
 export const clearAllArchivedAnalytics = async () => {
-  localStorage.removeItem('kukooo_order_archives');
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase.from('order_analytics_archives').delete().neq('id', 'keep_nothing');
+    if (error) throw error;
+    return;
+  }
 
-  return runDbOperation(
-    async () => {
-      const { error } = await supabase.from('order_analytics_archives').delete().neq('id', 'keep_nothing');
-      if (error) console.warn("Could not clear order_analytics_archives:", error);
-    },
-    async () => {}
-  );
+  localStorage.removeItem('kukooo_order_archives');
 };
 
 // --- FOOD WASTAGE MANAGEMENT ---
@@ -1216,13 +1239,13 @@ export const deleteFoodWastage = async (wasteId) => {
 };
 
 
-export const subscribeToOrders = (callback) => {
+export const subscribeToOrders = (callback, onError = console.error) => {
   if (isSupabaseConfigured && supabase) {
     let channel = null;
     let active = true;
     let refreshSequence = 0;
     // When Supabase is configured, orders are NOT cached in localStorage anymore,
-    // so the interval-based localStorage polling is removed to avoid stale callbacks.
+    // so this interval re-queries Supabase as a fallback if Realtime misses updates.
 
     const refreshOrders = async () => {
       const requestSequence = ++refreshSequence;
@@ -1232,27 +1255,34 @@ export const subscribeToOrders = (callback) => {
           callback(updatedOrders);
         }
       } catch (error) {
-        console.error('Could not refresh staff orders:', error);
+        if (active) onError(error);
       }
     };
 
-    hasSupabaseSession().then((authenticated) => {
-      if (!active || !authenticated) return;
+    const refreshInterval = setInterval(refreshOrders, 30000);
+
+    getAuthenticatedStaffRole().then((role) => {
+      if (!active) return;
+      if (!role) {
+        onError(new Error('No authorized staff session is available for live order updates.'));
+        return;
+      }
       channel = supabase.channel('public:orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, refreshOrders)
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
             refreshOrders();
           } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.error(`Staff order updates channel status: ${status}`);
+            onError(new Error(`Supabase Realtime order channel status: ${status}. Periodic database refresh remains enabled.`));
           }
         });
     }).catch((error) => {
-      console.error('Could not initialize staff order updates:', error);
+      if (active) onError(error);
     });
 
     return () => {
       active = false;
+      clearInterval(refreshInterval);
       if (channel) supabase.removeChannel(channel);
     };
   }

@@ -5,6 +5,9 @@ import { getOrderDiscount } from '../../utils/voucherUtils';
 
 export default function OrderManagement({ 
   orders, 
+  ordersLoadStatus = 'loaded',
+  ordersLoadError = '',
+  refreshOrders,
   updateOrderStatus, 
   deleteOrder, 
   archiveOrderAnalytics,
@@ -256,13 +259,24 @@ export default function OrderManagement({
     <div className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-3xl comic-border comic-shadow-sm space-y-4 sm:space-y-6">
       {/* Title & Quick Summary Bar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-gray-100 pb-3 sm:pb-4">
-        <div>
-          <h2 className="text-base sm:text-lg font-black text-accent flex items-center gap-2">
-            📦 Orders Ledger ({orders?.length || 0})
-          </h2>
-          <p className="text-[10px] sm:text-xs text-gray-400 font-bold">
-            Live order tracking, historical filtering & archive data management
-          </p>
+        <div className="flex w-full items-start justify-between gap-3 sm:w-auto">
+          <div>
+            <h2 className="text-base sm:text-lg font-black text-accent flex items-center gap-2">
+              📦 Orders Ledger ({orders?.length || 0})
+            </h2>
+            <p className="text-[10px] sm:text-xs text-gray-400 font-bold">
+              Live order tracking, historical filtering & archive data management
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={refreshOrders}
+            disabled={ordersLoadStatus === 'loading'}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-[10px] font-black text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+          >
+            <RotateCcw className={`h-3.5 w-3.5 ${ordersLoadStatus === 'loading' ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
         </div>
 
         {/* Quick Timeline Chips */}
@@ -289,6 +303,27 @@ export default function OrderManagement({
           ))}
         </div>
       </div>
+
+      {ordersLoadStatus === 'error' && (
+        <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
+          <div>
+            <strong className="block font-black">Could not load live orders from Supabase.</strong>
+            <span>{ordersLoadError || 'Check your staff session, database permissions, and connection.'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={refreshOrders}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 font-black hover:bg-red-100"
+          >
+            <RotateCcw className="h-3.5 w-3.5" /> Retry database read
+          </button>
+        </div>
+      )}
+      {ordersLoadStatus === 'loading' && (
+        <div role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
+          Loading orders from the database...
+        </div>
+      )}
 
       {legacyArchiveCount > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
@@ -537,7 +572,9 @@ export default function OrderManagement({
             ) : (
               <tr>
                 <td colSpan="8" className="text-center py-8 text-gray-400 font-bold">
-                  No orders found matching the filter criteria.
+                  {orders.length === 0 && ordersLoadStatus === 'loaded'
+                    ? 'The database returned no visible order rows for this staff account. If orders exist in Supabase, check the orders_staff_read policy and staff role.'
+                    : 'No orders found matching the filter criteria.'}
                 </td>
               </tr>
             )}

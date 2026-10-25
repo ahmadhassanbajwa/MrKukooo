@@ -203,32 +203,39 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_publication_tables 
-    WHERE pubname = 'supabase_realtime' AND tablename = 'orders'
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'orders'
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_publication_tables 
-    WHERE pubname = 'supabase_realtime' AND tablename = 'products'
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'products'
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.products;
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_publication_tables 
-    WHERE pubname = 'supabase_realtime' AND tablename = 'ingredients'
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'ingredients'
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.ingredients;
   END IF;
 END $$;
 
--- Fail closed: enable RLS for every table in public, including tables created
--- outside this script. Only the explicitly granted policies below are exposed.
+-- Apply RLS only to tables managed by this application. Do not modify unrelated
+-- Supabase or customer tables that happen to share the public schema.
 DO $$
 DECLARE
   table_name TEXT;
 BEGIN
   FOR table_name IN
-    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+    SELECT tablename
+    FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename IN (
+        'categories', 'ingredients', 'products', 'offers', 'orders', 'addons',
+        'branches', 'users', 'homepage_sections_doc', 'order_analytics_archives',
+        'vouchers', 'store_settings'
+      )
   LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', table_name);
   END LOOP;
@@ -255,16 +262,12 @@ BEGIN
   END LOOP;
 END $$;
 
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.categories, public.ingredients, public.products,
+  public.offers, public.orders, public.addons, public.branches, public.users,
+  public.homepage_sections_doc, public.order_analytics_archives, public.vouchers,
+  public.store_settings
+  FROM PUBLIC, anon, authenticated;
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.has_staff_role(required_roles TEXT[])
 RETURNS BOOLEAN

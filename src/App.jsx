@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { 
   isSupabaseConfigured,
   getAuthenticatedStaffRole,
@@ -109,6 +109,29 @@ export default function App() {
     isSupabaseConfigured ? [] : getCachedData('kukooo_orders', INITIAL_ORDERS)
   );
   const ordersFetchVersion = useRef(0);
+  const [ordersLoadStatus, setOrdersLoadStatus] = useState('loading');
+  const [ordersLoadError, setOrdersLoadError] = useState('');
+  const refreshOrders = useCallback(async () => {
+    const requestVersion = ++ordersFetchVersion.current;
+    setOrdersLoadStatus('loading');
+    setOrdersLoadError('');
+    try {
+      const updatedOrders = await getOrders();
+      if (!Array.isArray(updatedOrders)) {
+        throw new Error('Supabase did not return an order list. Check the staff session and database permissions.');
+      }
+      if (requestVersion === ordersFetchVersion.current) {
+        setOrders(updatedOrders);
+        setOrdersLoadStatus('loaded');
+      }
+    } catch (error) {
+      console.error('Could not load staff orders from the database:', error);
+      if (requestVersion === ordersFetchVersion.current) {
+        setOrdersLoadError(error.message || 'Could not load orders from the database.');
+        setOrdersLoadStatus('error');
+      }
+    }
+  }, []);
   const [addons, setAddons] = useState(() => getCachedData('kukooo_addons', INITIAL_ADDONS));
   const [homepageSections, setHomepageSections] = useState(() => getCachedData('kukooo_homepage_sections', INITIAL_HOMEPAGE_SECTIONS));
   const [branches, setBranches] = useState(() => getCachedData('kukooo_branches', INITIAL_BRANCHES));
@@ -211,7 +234,19 @@ export default function App() {
       if (cats && cats.length) setCategories(cats);
       if (prods && prods.length) setProducts(prods);
       if (offs && offs.length) setOffers(offs);
-      if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(ords)) setOrders(ords);
+      if (ordersRequestVersion === ordersFetchVersion.current) {
+        if (Array.isArray(ords)) {
+          setOrders(ords);
+          setOrdersLoadError('');
+          setOrdersLoadStatus('loaded');
+        } else {
+          const error = results[3].status === 'rejected'
+            ? results[3].reason
+            : new Error('Supabase did not return an order list.');
+          setOrdersLoadError(error.message || 'Could not load orders from the database.');
+          setOrdersLoadStatus('error');
+        }
+      }
       if (adds && adds.length) setAddons(adds);
       if (secs && secs.length) setHomepageSections(secs);
       if (brs && brs.length) setBranches(brs);
@@ -226,7 +261,14 @@ export default function App() {
       if (isMounted && Array.isArray(updatedOrders)) {
         ordersFetchVersion.current += 1;
         setOrders(updatedOrders);
+        setOrdersLoadError('');
+        setOrdersLoadStatus('loaded');
       }
+    }, (error) => {
+      if (!isMounted) return;
+      console.error('Live order refresh failed:', error);
+      setOrdersLoadError(error.message || 'Live order refresh failed.');
+      setOrdersLoadStatus('error');
     });
 
     const unsubscribeProducts = subscribeToProducts((updatedProducts) => {
@@ -295,7 +337,19 @@ export default function App() {
     if (cats) setCategories(cats);
     if (prods) setProducts(prods);
     if (offs) setOffers(offs);
-    if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(ords)) setOrders(ords);
+    if (ordersRequestVersion === ordersFetchVersion.current) {
+      if (Array.isArray(ords)) {
+        setOrders(ords);
+        setOrdersLoadError('');
+        setOrdersLoadStatus('loaded');
+      } else {
+        const orderError = results[3].status === 'rejected'
+          ? results[3].reason
+          : new Error('Supabase did not return an order list.');
+        setOrdersLoadError(orderError.message || 'Could not load orders from the database.');
+        setOrdersLoadStatus('error');
+      }
+    }
     if (adds) setAddons(adds);
     if (secs) setHomepageSections(secs);
     if (brs) setBranches(brs);
@@ -311,7 +365,11 @@ export default function App() {
       // Refresh archives and orders optimistically
       const ordersRequestVersion = ++ordersFetchVersion.current;
       const [newOrds, newArchs] = await Promise.all([getOrders(), getArchivedAnalytics()]);
-      if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(newOrds)) setOrders(newOrds);
+      if (ordersRequestVersion === ordersFetchVersion.current && Array.isArray(newOrds)) {
+        setOrders(newOrds);
+        setOrdersLoadError('');
+        setOrdersLoadStatus('loaded');
+      }
       setArchivedAnalytics(newArchs);
       return result;
     } catch (err) {
@@ -433,7 +491,18 @@ export default function App() {
       await placeOrderInDB(newOrder, products);
     } catch (err) {
       console.error("Failed to place order:", err);
-      alert(err.message || "Failed to place order due to insufficient stock.");
+      ordersFetchVersion.current += 1;
+      setOrders(prev => prev.filter(order => order.order_id !== newOrder.order_id));
+      setIngredients(prev => applyIngredientStockChange(prev, ingredientDeductions, true));
+      setProducts(prev => applyProductStockChange(prev, productDeductions, true));
+      if (newOrder.voucher_code) {
+        setVouchers(prev => prev.map(v =>
+          v.code?.toUpperCase() === newOrder.voucher_code?.toUpperCase()
+            ? { ...v, times_used: Math.max(0, (Number(v.times_used) || 0) - 1) }
+            : v
+        ));
+      }
+      alert(`Order was not saved to the database and has been removed from the live order list. ${err.message || 'Please try again.'}`);
       throw err;
     }
   };
@@ -468,6 +537,8 @@ export default function App() {
       await updateOrderStatusInDB(orderId, newStatus, products, currentOrder);
     } catch (err) {
       console.error("Failed to update status:", err);
+      await refreshOrders();
+      alert(`Order status was not saved to the database. ${err.message || ''}`);
     }
   };
 
@@ -478,6 +549,8 @@ export default function App() {
       await updateOrderDetailsInDB(orderId, items, totalAmount, extraFields);
     } catch (err) {
       console.error("Failed to update order details:", err);
+      await refreshOrders();
+      alert(`Order changes were not saved to the database. ${err.message || ''}`);
     }
   };
 
@@ -488,6 +561,8 @@ export default function App() {
       await deleteOrderInDB(orderId);
     } catch (err) {
       console.error("Failed to delete order:", err);
+      await refreshOrders();
+      alert(`Order was not deleted from the database. ${err.message || ''}`);
     }
   };
 
@@ -785,6 +860,9 @@ export default function App() {
               products={products}
               offers={offers}
               orders={orders}
+              ordersLoadStatus={ordersLoadStatus}
+              ordersLoadError={ordersLoadError}
+              refreshOrders={refreshOrders}
               archivedAnalytics={archivedAnalytics}
               archiveOrderAnalytics={handleArchiveOrderAnalytics}
               addons={addons}
