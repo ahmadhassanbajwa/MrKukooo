@@ -182,6 +182,9 @@ export default function ManagerDashboard({
         return (
           <DashboardAnalytics
             orders={orders}
+            ordersLoadStatus={ordersLoadStatus}
+            ordersLoadError={ordersLoadError}
+            refreshOrders={refreshOrders}
             archivedAnalytics={archivedAnalytics}
             branches={branches}
             selectedBranchId={selectedBranchId}

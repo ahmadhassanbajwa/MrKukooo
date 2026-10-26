@@ -205,13 +205,12 @@ export default function App() {
     const initializeAppBackend = async () => {
       // Run database seed check in background
       seedDatabaseIfEmpty();
-      const ordersRequestVersion = ++ordersFetchVersion.current;
+      if (staffSession) refreshOrders();
 
       const results = await Promise.allSettled([
         getCategories(),
         getProducts(),
         getOffers(),
-        getOrders(),
         getAddons(),
         getHomepageSections(),
         getBranches(),
@@ -221,7 +220,7 @@ export default function App() {
       ]);
       if (!isMounted) return;
 
-      const names = ['categories', 'products', 'offers', 'orders', 'addons', 'homepage sections', 'branches', 'ingredients', 'vouchers', 'voucher settings'];
+      const names = ['categories', 'products', 'offers', 'addons', 'homepage sections', 'branches', 'ingredients', 'vouchers', 'voucher settings'];
       const values = results.map((result, index) => {
         if (result.status === 'rejected') {
           console.error(`Error loading ${names[index]} from backend:`, result.reason);
@@ -229,24 +228,11 @@ export default function App() {
         }
         return result.value;
       });
-      const [cats, prods, offs, ords, adds, secs, brs, ings, vchs, vchSettings] = values;
+      const [cats, prods, offs, adds, secs, brs, ings, vchs, vchSettings] = values;
 
       if (cats && cats.length) setCategories(cats);
       if (prods && prods.length) setProducts(prods);
       if (offs && offs.length) setOffers(offs);
-      if (ordersRequestVersion === ordersFetchVersion.current) {
-        if (Array.isArray(ords)) {
-          setOrders(ords);
-          setOrdersLoadError('');
-          setOrdersLoadStatus('loaded');
-        } else {
-          const error = results[3].status === 'rejected'
-            ? results[3].reason
-            : new Error('Supabase did not return an order list.');
-          setOrdersLoadError(error.message || 'Could not load orders from the database.');
-          setOrdersLoadStatus('error');
-        }
-      }
       if (adds && adds.length) setAddons(adds);
       if (secs && secs.length) setHomepageSections(secs);
       if (brs && brs.length) setBranches(brs);
@@ -285,7 +271,7 @@ export default function App() {
       unsubscribeProducts();
       unsubscribeIngredients();
     };
-  }, [staffSession]);
+  }, [staffSession, refreshOrders]);
 
   // Lazy load analytics archives & food wastage only when manager view is accessed
   useEffect(() => {
@@ -806,6 +792,8 @@ export default function App() {
   };
 
   const handleLogin = (role) => {
+    setOrdersLoadStatus('loading');
+    setOrdersLoadError('');
     setStaffSession(role);
     setCurrentView(role);
   };

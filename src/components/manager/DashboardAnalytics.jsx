@@ -4,6 +4,9 @@ import { getOrderDiscount } from '../../utils/voucherUtils';
 
 export default function DashboardAnalytics({
   orders = [],
+  ordersLoadStatus = 'loaded',
+  ordersLoadError = '',
+  refreshOrders,
   archivedAnalytics = [],
   branches = [],
   selectedBranchId,
@@ -416,6 +419,32 @@ export default function DashboardAnalytics({
       console.error("PDF generation failed:", err);
     }
   };
+
+  if (ordersLoadStatus === 'loading') {
+    return (
+      <div role="status" className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-800">
+        Loading orders from the database before calculating analytics...
+      </div>
+    );
+  }
+
+  if (ordersLoadStatus === 'error') {
+    return (
+      <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
+        <div>
+          <strong className="block font-black">Could not load live orders for analytics.</strong>
+          <span>{ordersLoadError || 'Check your staff session, database permissions, and connection.'}</span>
+        </div>
+        <button
+          type="button"
+          onClick={refreshOrders}
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 font-black hover:bg-red-100"
+        >
+          Retry database read
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 sm:space-y-6">
