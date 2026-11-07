@@ -7,20 +7,19 @@ export default function ProductCard({ product, onCustomize }) {
   const [isLiked, setIsLiked] = useState(false);
 
   return (
-    <div 
-      onClick={(e) => { 
+    <div
+      onClick={(e) => {
         if (is_available) {
-          e.preventDefault(); 
-          e.stopPropagation(); 
-          onCustomize(product); 
+          e.preventDefault();
+          e.stopPropagation();
+          onCustomize(product);
         }
       }}
-      className={`bg-white rounded-lg sm:rounded-xl border border-gray-200 shadow-2xs hover:shadow-sm hover:border-gray-300 transition-all duration-200 flex flex-col justify-between overflow-hidden p-3 sm:p-4 relative group h-full select-none ${
-        is_available ? 'cursor-pointer' : 'opacity-70'
-      }`}
+      className={`bg-white rounded-lg sm:rounded-xl border border-gray-200 shadow-2xs hover:shadow-sm hover:border-gray-300 transition-all duration-200 flex flex-col justify-between overflow-hidden p-3 sm:p-4 relative group h-full select-none ${is_available ? 'cursor-pointer' : 'opacity-70'
+        }`}
     >
       {/* Top Heart Icon */}
-      <button 
+      <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
@@ -40,7 +39,7 @@ export default function ProductCard({ product, onCustomize }) {
           className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-102"
           loading="lazy"
         />
-        
+
         {!is_available && (
           <div className="absolute inset-0 bg-white/75 backdrop-blur-[1px] z-10 flex items-center justify-center rounded-md">
             <span className="bg-primary text-white text-[10px] sm:text-xs font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md shadow-2xs">
@@ -56,10 +55,10 @@ export default function ProductCard({ product, onCustomize }) {
           <h3 className="text-xs sm:text-sm md:text-[15px] font-bold text-gray-900 tracking-tight leading-snug line-clamp-1 sm:line-clamp-2">
             {name}
           </h3>
-          
+
           {description && (
-            <p className="text-[11px] sm:text-xs text-gray-500 font-normal mt-1 line-clamp-2 leading-relaxed min-h-[22px] sm:min-h-[28px]">
-              {description}
+            <p className="text-[15px] sm:text-xs text-gray-500 font-normal mt-1 line-clamp-2 leading-relaxed min-h-[22px] sm:min-h-[28px]">
+              <b>{description}</b>
             </p>
           )}
         </div>

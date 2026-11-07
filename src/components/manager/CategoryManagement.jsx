@@ -38,6 +38,9 @@ export default function CategoryManagement({ categories, saveCategory, deleteCat
         uploadedUrl = await uploadImage(file, 'categories');
       } catch (err) {
         console.error("Image upload failed:", err);
+        alert(`Image upload failed: ${err.message || err}. Please try again or paste an image link.`);
+        setIsUploading(false);
+        return;
       }
     }
 

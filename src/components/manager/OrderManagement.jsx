@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { Search, Trash2, Eye, X, Printer, Calendar, Filter, RotateCcw, MapPin, Archive, ShieldCheck, CheckCircle2, Loader2 } from 'lucide-react';
 import { printReceipt } from '../../utils/printReceipt';
 import { getOrderDiscount } from '../../utils/voucherUtils';
+import { getOrdersByDateRange } from '../../supabase';
 
 export default function OrderManagement({ 
   orders, 
@@ -16,16 +17,56 @@ export default function OrderManagement({
   deleteArchivedAnalytics,
   clearAllArchivedAnalytics
 }) {
+  const todayDateStr = useMemo(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [branchFilter, setBranchFilter] = useState('All');
-  const [timelinePreset, setTimelinePreset] = useState('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [timelinePreset, setTimelinePreset] = useState('today');
+  const [startDate, setStartDate] = useState(todayDateStr);
+  const [endDate, setEndDate] = useState(todayDateStr);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [historicalOrders, setHistoricalOrders] = useState(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const historyCache = useRef(new Map());
+
   const legacyArchiveCount = archivedAnalytics.filter(
     archive => !Array.isArray(archive.order_ids) || archive.order_ids.length === 0
   ).length;
+
+  const fetchHistory = useCallback(async (start, end, branch = 'All') => {
+    if (start === todayDateStr && end === todayDateStr) {
+      setHistoricalOrders(null);
+      setIsLoadingHistory(false);
+      return;
+    }
+    const cacheKey = `${start}_${end}_${branch}`;
+    if (historyCache.current.has(cacheKey)) {
+      setHistoricalOrders(historyCache.current.get(cacheKey));
+      setIsLoadingHistory(false);
+      return;
+    }
+    setIsLoadingHistory(true);
+    setHistoryError('');
+    try {
+      const res = await getOrdersByDateRange(start, end, branch);
+      const list = Array.isArray(res) ? res : [];
+      historyCache.current.set(cacheKey, list);
+      setHistoricalOrders(list);
+    } catch (err) {
+      console.error("Failed to fetch historical orders:", err);
+      setHistoryError(err.message || 'Failed to load historical orders.');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, [todayDateStr]);
 
   // Archive Modal State
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
@@ -82,49 +123,68 @@ export default function OrderManagement({
       return `${year}-${month}-${day}`;
     };
 
+    let newStart = todayDateStr;
+    let newEnd = todayDateStr;
+
     switch (preset) {
       case 'today': {
-        const d = formatDate(today);
-        setStartDate(d);
-        setEndDate(d);
-        break;
+        newStart = formatDate(today);
+        newEnd = formatDate(today);
+        setStartDate(newStart);
+        setEndDate(newEnd);
+        setHistoricalOrders(null);
+        return;
       }
       case 'yesterday': {
         const y = new Date(today);
         y.setDate(y.getDate() - 1);
-        const d = formatDate(y);
-        setStartDate(d);
-        setEndDate(d);
+        newStart = formatDate(y);
+        newEnd = formatDate(y);
         break;
       }
       case 'last7': {
         const past = new Date(today);
         past.setDate(past.getDate() - 6);
-        setStartDate(formatDate(past));
-        setEndDate(formatDate(today));
+        newStart = formatDate(past);
+        newEnd = formatDate(today);
         break;
       }
       case 'last30': {
         const past = new Date(today);
         past.setDate(past.getDate() - 29);
-        setStartDate(formatDate(past));
-        setEndDate(formatDate(today));
+        newStart = formatDate(past);
+        newEnd = formatDate(today);
         break;
       }
       case 'thisMonth': {
         const start = new Date(today.getFullYear(), today.getMonth(), 1);
-        setStartDate(formatDate(start));
-        setEndDate(formatDate(today));
+        newStart = formatDate(start);
+        newEnd = formatDate(today);
         break;
       }
       case 'all': {
-        setStartDate('');
-        setEndDate('');
+        newStart = '2020-01-01';
+        newEnd = formatDate(today);
         break;
       }
       case 'custom':
       default:
         break;
+    }
+
+    setStartDate(newStart);
+    setEndDate(newEnd);
+    fetchHistory(newStart, newEnd, branchFilter);
+  };
+
+  const handleCustomDateChange = (newStart, newEnd) => {
+    setTimelinePreset('custom');
+    if (newStart !== undefined) setStartDate(newStart);
+    if (newEnd !== undefined) setEndDate(newEnd);
+    const s = newStart !== undefined ? newStart : startDate;
+    const e = newEnd !== undefined ? newEnd : endDate;
+    if (s && e) {
+      fetchHistory(s, e, branchFilter);
     }
   };
 
@@ -132,27 +192,27 @@ export default function OrderManagement({
     setSearchTerm('');
     setStatusFilter('All');
     setBranchFilter('All');
-    setTimelinePreset('all');
-    setStartDate('');
-    setEndDate('');
+    setTimelinePreset('today');
+    setStartDate(todayDateStr);
+    setEndDate(todayDateStr);
+    setHistoricalOrders(null);
+    setIsLoadingHistory(false);
   };
 
+  const sourceOrders = useMemo(() => {
+    if (timelinePreset === 'today') return orders || [];
+    return historicalOrders !== null ? historicalOrders : (orders || []);
+  }, [timelinePreset, historicalOrders, orders]);
+
   const filtered = useMemo(() => {
-    return (orders || []).filter(o => {
+    return (sourceOrders || []).filter(o => {
       // 1. Status Filter
       if (statusFilter !== 'All' && (o.status || '').toLowerCase() !== statusFilter.toLowerCase()) return false;
       
       // 2. Branch Filter
       if (branchFilter !== 'All' && o.branch_id !== branchFilter) return false;
 
-      // 3. Timeline / Date Range Filter
-      if (startDate || endDate) {
-        const orderDate = o.timestamp ? o.timestamp.split('T')[0] : '';
-        if (startDate && orderDate < startDate) return false;
-        if (endDate && orderDate > endDate) return false;
-      }
-
-      // 4. Search Filter
+      // 3. Search Filter
       if (searchTerm.trim()) {
         const term = searchTerm.toLowerCase();
         const matchId = (o.order_id || '').toLowerCase().includes(term);
@@ -163,7 +223,7 @@ export default function OrderManagement({
 
       return true;
     });
-  }, [orders, statusFilter, branchFilter, startDate, endDate, searchTerm]);
+  }, [sourceOrders, statusFilter, branchFilter, searchTerm]);
 
   const totalFilteredRevenue = useMemo(() => {
     return filtered.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
@@ -372,7 +432,13 @@ export default function OrderManagement({
                 <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                 <select
                   value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value)}
+                  onChange={(e) => {
+                    const newBranch = e.target.value;
+                    setBranchFilter(newBranch);
+                    if (timelinePreset !== 'today') {
+                      fetchHistory(startDate, endDate, newBranch);
+                    }
+                  }}
                   className="bg-transparent text-xs font-black text-accent focus:outline-none cursor-pointer pr-1"
                 >
                   <option value="All">All Branches</option>
@@ -432,10 +498,7 @@ export default function OrderManagement({
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setTimelinePreset('custom');
-                }}
+                onChange={(e) => handleCustomDateChange(e.target.value, undefined)}
                 className="bg-white border border-gray-300 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:border-secondary cursor-pointer"
               />
             </div>
@@ -444,19 +507,16 @@ export default function OrderManagement({
               <input
                 type="date"
                 value={endDate}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setTimelinePreset('custom');
-                }}
+                onChange={(e) => handleCustomDateChange(undefined, e.target.value)}
                 className="bg-white border border-gray-300 rounded-xl px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:border-secondary cursor-pointer"
               />
             </div>
-            {(startDate || endDate) && (
+            {(startDate !== todayDateStr || endDate !== todayDateStr || timelinePreset !== 'today') && (
               <button
-                onClick={() => { setStartDate(''); setEndDate(''); setTimelinePreset('all'); }}
+                onClick={() => handlePresetChange('today')}
                 className="text-[10px] text-gray-400 hover:text-primary underline cursor-pointer ml-auto"
               >
-                Clear Timeline
+                Back to Today
               </button>
             )}
           </div>
@@ -465,7 +525,7 @@ export default function OrderManagement({
         {/* Active Stats Summary */}
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-gray-500 border-b border-gray-100 pb-2">
           <div className="flex items-center gap-2">
-            <span>Showing <strong className="text-accent">{filtered.length}</strong> of {orders?.length || 0} orders</span>
+            <span>Showing <strong className="text-accent">{filtered.length}</strong> {timelinePreset === 'today' ? "today's orders" : "orders"}</span>
             {(startDate || endDate) && (
               <span className="bg-yellow-100 text-yellow-800 text-[10px] font-black px-2 py-0.5 rounded-md">
                 📅 {startDate || 'Start'} to {endDate || 'Now'}
@@ -477,6 +537,12 @@ export default function OrderManagement({
           </div>
         </div>
       </div>
+
+      {historyError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-800">
+          {historyError}
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
@@ -493,7 +559,16 @@ export default function OrderManagement({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 text-xs font-bold text-accent">
-            {filtered.length > 0 ? (
+            {isLoadingHistory ? (
+              <tr>
+                <td colSpan="8" className="py-12 text-center text-gray-500 font-bold">
+                  <div className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    <span>Fetching orders from database...</span>
+                  </div>
+                </td>
+              </tr>
+            ) : filtered.length > 0 ? (
               filtered.map(o => {
                 const branchObj = (branches || []).find(b => b.id === o.branch_id);
                 const statusLower = (o.status || '').toLowerCase();

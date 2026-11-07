@@ -13,8 +13,7 @@ import {
   Percent, 
   DollarSign, 
   Eye, 
-  EyeOff, 
-  Sparkles 
+  EyeOff
 } from 'lucide-react';
 
 export default function VoucherManagement({

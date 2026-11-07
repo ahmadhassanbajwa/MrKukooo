@@ -42,9 +42,25 @@ export const INITIAL_BRANCHES = [
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const cloudinaryCloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+const cloudinaryUploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
 
 export const isSupabaseConfigured = !!supabaseUrl && !!supabaseAnonKey;
+export const isCloudinaryConfigured = !!cloudinaryCloudName && !!cloudinaryUploadPreset;
 export const isFirebaseConfigured = isSupabaseConfigured; // Backward compatibility alias
+
+export const getTodayDateRange = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const todayDateStr = `${year}-${month}-${day}`;
+  return {
+    todayDateStr,
+    startOfToday: `${todayDateStr}T00:00:00`,
+    endOfToday: `${todayDateStr}T23:59:59.999`
+  };
+};
 
 export let supabase = null;
 
@@ -99,10 +115,15 @@ export const getAuthenticatedStaffRole = async () => {
 };
 
 // ==========================================
-// 1. FILE UPLOAD CONTROLLER
+// 1. FILE UPLOAD CONTROLLER (CLOUDINARY CDN)
 // ==========================================
-export const uploadImage = async (file, folder = 'uploads') => {
+export const uploadImage = async (file, folder = 'mrkukooo') => {
   if (!file) return '';
+
+  // If already a valid URL string, return directly
+  if (typeof file === 'string') {
+    if (file.startsWith('http://') || file.startsWith('https://')) return file;
+  }
 
   const compressImage = (fileObj) => {
     return new Promise((resolve, reject) => {
@@ -112,16 +133,17 @@ export const uploadImage = async (file, folder = 'uploads') => {
         img.onload = () => {
           const canvas = document.createElement('canvas');
           let { width, height } = img;
-          const MAX_SIZE = 500;
+          const MAX_SIZE = 1200;
           if (width > height) {
             if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; }
           } else {
             if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; }
           }
-          canvas.width = width; canvas.height = height;
+          canvas.width = Math.round(width);
+          canvas.height = Math.round(height);
           const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
         };
         img.onerror = () => reject(new Error("Image processing failed"));
         img.src = event.target.result;
@@ -143,32 +165,36 @@ export const uploadImage = async (file, folder = 'uploads') => {
 
   try {
     const base64Str = await compressImage(file);
+    const fileName = `${Date.now()}_${(file.name || 'image').replace(/\s+/g, '_').split('.')[0]}.jpg`;
+    const compressedFile = dataURLtoFile(base64Str, fileName);
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_').split('.')[0]}.jpg`;
-        const compressedFile = dataURLtoFile(base64Str, fileName);
-        
-        const { error } = await supabase.storage
-          .from('uploads')
-          .upload(`${folder}/${fileName}`, compressedFile);
-          
-        if (error) throw error;
-        
-        const { data: publicUrlData } = supabase.storage
-          .from('uploads')
-          .getPublicUrl(`${folder}/${fileName}`);
-          
-        return publicUrlData.publicUrl;
-      } catch (error) {
-        console.warn("Supabase Storage failed. Falling back to Base64.", error);
-        return base64Str;
+    // Primary: Cloudinary CDN Direct Upload (Zero Supabase Egress)
+    if (isCloudinaryConfigured) {
+      const formData = new FormData();
+      formData.append('file', compressedFile);
+      formData.append('upload_preset', cloudinaryUploadPreset);
+      if (folder) formData.append('folder', folder);
+
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(`Cloudinary upload failed: ${errData?.error?.message || res.statusText}`);
       }
+
+      const data = await res.json();
+      return data.secure_url;
     }
-    return base64Str;
+
+    // Secondary fallback for local offline testing only
+    console.warn("Cloudinary credentials missing in .env. Falling back to object URL.");
+    return URL.createObjectURL(file);
   } catch (err) {
     console.error("Image upload critical failure:", err);
-    return URL.createObjectURL(file);
+    throw err;
   }
 };
 
@@ -607,42 +633,55 @@ const mergeOrdersWithLocalData = (dbOrders = []) => {
 };
 
 // --- ORDERS ---
-const fetchAllOrdersFromSupabase = async () => {
+export const fetchOrdersFromSupabase = async ({ startDate, endDate, branchId } = {}) => {
   const staffRole = await getAuthenticatedStaffRole();
   if (!staffRole) {
     throw new Error('Your staff session is not authorized to read orders. Sign in again and verify the staff role in Supabase.');
   }
 
-  const pageSize = 1000;
-  const orders = [];
+  let query = supabase
+    .from('orders')
+    .select('*')
+    .order('timestamp', { ascending: false });
 
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .order('timestamp', { ascending: false })
-      .order('order_id', { ascending: false })
-      .range(from, from + pageSize - 1);
-
-    if (error) throw error;
-    const page = data || [];
-    orders.push(...page);
-    if (page.length < pageSize) break;
+  // On-Demand Date Filtering:
+  // If specific range provided, query between start and end of those dates
+  if (startDate && endDate) {
+    query = query
+      .gte('timestamp', `${startDate}T00:00:00`)
+      .lte('timestamp', `${endDate}T23:59:59.999`);
+  } else if (startDate) {
+    query = query.gte('timestamp', `${startDate}T00:00:00`);
+  } else {
+    // Default to TODAY's orders only (saving 95%+ bandwidth)
+    const { startOfToday } = getTodayDateRange();
+    query = query.gte('timestamp', startOfToday);
   }
 
-  return mergeOrdersWithLocalData(orders)
+  if (branchId && branchId !== 'All') {
+    query = query.eq('branch_id', branchId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return mergeOrdersWithLocalData(data || [])
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 };
 
-export const getOrders = async () => {
+export const getOrders = async (range) => {
   if (isSupabaseConfigured && supabase) {
-    return fetchAllOrdersFromSupabase();
+    return fetchOrdersFromSupabase(range);
   }
 
   const local = localStorage.getItem('kukooo_orders');
   if (local) return JSON.parse(local).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   localStorage.setItem('kukooo_orders', JSON.stringify(INITIAL_ORDERS));
   return INITIAL_ORDERS;
+};
+
+export const getOrdersByDateRange = async (startDate, endDate, branchId = 'All') => {
+  return fetchOrdersFromSupabase({ startDate, endDate, branchId });
 };
 
 export const placeOrderInDB = async (order, allProducts = []) => {
@@ -1018,10 +1057,25 @@ export const archiveOrderAnalytics = async ({ startDate, endDate, branchId = 'Al
     }
     const { error } = await supabase.from('order_analytics_archives').upsert(archivePayload);
     if (error) throw error;
+
+    // Prune archived orders from active orders table in batches of 200
+    const orderIds = ordersToArchive.map(order => String(order.order_id));
+    for (let i = 0; i < orderIds.length; i += 200) {
+      const batch = orderIds.slice(i, i + 200);
+      const { error: delError } = await supabase
+        .from('orders')
+        .delete()
+        .in('order_id', batch);
+      if (delError) console.warn("Pruning archived orders warning:", delError);
+    }
   } else {
     const archives = JSON.parse(localStorage.getItem('kukooo_order_archives') || '[]');
     archives.push(archivePayload);
     localStorage.setItem('kukooo_order_archives', JSON.stringify(archives));
+
+    const localOrders = JSON.parse(localStorage.getItem('kukooo_orders') || '[]');
+    const pruneSet = new Set(ordersToArchive.map(o => String(o.order_id)));
+    localStorage.setItem('kukooo_orders', JSON.stringify(localOrders.filter(o => !pruneSet.has(String(o.order_id)))));
   }
 
   return { count: ordersToArchive.length, archiveId };
@@ -1243,37 +1297,66 @@ export const subscribeToOrders = (callback, onError = console.error) => {
   if (isSupabaseConfigured && supabase) {
     let channel = null;
     let active = true;
-    let refreshSequence = 0;
-    // When Supabase is configured, orders are NOT cached in localStorage anymore,
-    // so this interval re-queries Supabase as a fallback if Realtime misses updates.
+    let currentOrders = [];
 
-    const refreshOrders = async () => {
-      const requestSequence = ++refreshSequence;
-      try {
-        const updatedOrders = await fetchAllOrdersFromSupabase();
-        if (active && requestSequence === refreshSequence && Array.isArray(updatedOrders)) {
-          callback(updatedOrders);
-        }
-      } catch (error) {
-        if (active) onError(error);
-      }
-    };
+    // 1. Initial load: fetch today's orders only
+    fetchOrdersFromSupabase()
+      .then((todayOrders) => {
+        if (!active) return;
+        currentOrders = Array.isArray(todayOrders) ? todayOrders : [];
+        callback(currentOrders);
+      })
+      .catch((err) => {
+        if (active) onError(err);
+      });
 
-    const refreshInterval = setInterval(refreshOrders, 30000);
-
+    // 2. Realtime subscription: delta-only updates (no polling, no full scans)
     getAuthenticatedStaffRole().then((role) => {
       if (!active) return;
       if (!role) {
         onError(new Error('No authorized staff session is available for live order updates.'));
         return;
       }
+
       channel = supabase.channel('public:orders')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, refreshOrders)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+          if (!active) return;
+          const { eventType, new: newRecord, old: oldRecord } = payload;
+          const { todayDateStr } = getTodayDateRange();
+
+          if (eventType === 'INSERT' && newRecord) {
+            const orderDate = newRecord.timestamp ? newRecord.timestamp.split('T')[0] : '';
+            // Only add to today's active list if it belongs to today
+            if (!orderDate || orderDate === todayDateStr) {
+              const formatted = mergeOrdersWithLocalData([newRecord])[0];
+              currentOrders = [
+                formatted,
+                ...currentOrders.filter(o => o.order_id !== formatted.order_id)
+              ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+              callback([...currentOrders]);
+            }
+          } else if (eventType === 'UPDATE' && newRecord) {
+            const formatted = mergeOrdersWithLocalData([newRecord])[0];
+            const exists = currentOrders.some(o => o.order_id === formatted.order_id);
+            if (exists) {
+              currentOrders = currentOrders.map(o =>
+                o.order_id === formatted.order_id ? formatted : o
+              );
+            } else {
+              const orderDate = newRecord.timestamp ? newRecord.timestamp.split('T')[0] : '';
+              if (!orderDate || orderDate === todayDateStr) {
+                currentOrders = [formatted, ...currentOrders].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+              }
+            }
+            callback([...currentOrders]);
+          } else if (eventType === 'DELETE' && oldRecord) {
+            currentOrders = currentOrders.filter(o => o.order_id !== oldRecord.order_id);
+            callback([...currentOrders]);
+          }
+        })
         .subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            refreshOrders();
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            onError(new Error(`Supabase Realtime order channel status: ${status}. Periodic database refresh remains enabled.`));
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            onError(new Error(`Supabase Realtime order channel status: ${status}`));
           }
         });
     }).catch((error) => {
@@ -1282,7 +1365,6 @@ export const subscribeToOrders = (callback, onError = console.error) => {
 
     return () => {
       active = false;
-      clearInterval(refreshInterval);
       if (channel) supabase.removeChannel(channel);
     };
   }
@@ -1475,7 +1557,29 @@ export const getOrderTracking = async (orderId, trackingToken) => {
     p_tracking_token: trackingToken
   });
   if (error) throw error;
-  return data?.[0] || null;
+  if (data && data.length > 0) return data[0];
+
+  // If not found in active orders, check if it was archived into historical analytics
+  try {
+    const { data: archs } = await supabase
+      .from('order_analytics_archives')
+      .select('archived_at')
+      .contains('order_ids', [String(orderId)])
+      .limit(1);
+    if (archs && archs.length > 0) {
+      return {
+        order_id: orderId,
+        status: 'Completed (Archived)',
+        is_archived: true,
+        timestamp: archs[0].archived_at,
+        message: 'This order was completed and archived over 30 days ago.'
+      };
+    }
+  } catch (archErr) {
+    console.warn("Could not check archive for tracked order:", archErr);
+  }
+
+  return null;
 };
 // ==========================================
 // 4. VOUCHERS & DISCOUNT PROMO CODES

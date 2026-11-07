@@ -78,6 +78,9 @@ export default function OfferManagement({
         uploadedUrl = await uploadImage(file, 'offers');
       } catch (err) {
         console.error("Image upload failed:", err);
+        alert(`Image upload failed: ${err.message || err}. Please try again or paste an image link.`);
+        setIsUploading(false);
+        return;
       }
     }
 

@@ -172,6 +172,7 @@ ALTER TABLE public.order_analytics_archives
 CREATE TABLE IF NOT EXISTS public.vouchers (
     id TEXT PRIMARY KEY,
     code TEXT UNIQUE NOT NULL,
+    
     type TEXT NOT NULL,
     value NUMERIC DEFAULT 0,
     min_order NUMERIC DEFAULT 0,

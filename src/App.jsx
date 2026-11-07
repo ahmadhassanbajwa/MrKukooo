@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, Component } from 'react';
 import { 
   isSupabaseConfigured,
   getAuthenticatedStaffRole,
@@ -243,19 +243,22 @@ export default function App() {
 
     initializeAppBackend();
 
-    const unsubscribeOrders = subscribeToOrders((updatedOrders) => {
-      if (isMounted && Array.isArray(updatedOrders)) {
-        ordersFetchVersion.current += 1;
-        setOrders(updatedOrders);
-        setOrdersLoadError('');
-        setOrdersLoadStatus('loaded');
-      }
-    }, (error) => {
-      if (!isMounted) return;
-      console.error('Live order refresh failed:', error);
-      setOrdersLoadError(error.message || 'Live order refresh failed.');
-      setOrdersLoadStatus('error');
-    });
+    let unsubscribeOrders = () => {};
+    if (staffSession) {
+      unsubscribeOrders = subscribeToOrders((updatedOrders) => {
+        if (isMounted && Array.isArray(updatedOrders)) {
+          ordersFetchVersion.current += 1;
+          setOrders(updatedOrders);
+          setOrdersLoadError('');
+          setOrdersLoadStatus('loaded');
+        }
+      }, (error) => {
+        if (!isMounted) return;
+        console.error('Live order refresh failed:', error);
+        setOrdersLoadError(error.message || 'Live order refresh failed.');
+        setOrdersLoadStatus('error');
+      });
+    }
 
     const unsubscribeProducts = subscribeToProducts((updatedProducts) => {
       if (isMounted && updatedProducts) setProducts(updatedProducts);
@@ -956,10 +959,10 @@ export default function App() {
   };
 
   return (
-    <>
+    <AppErrorBoundary>
       {renderWarningBanner()}
       {renderView()}
-    </>
+    </AppErrorBoundary>
   );
 }
 
@@ -970,4 +973,58 @@ function ViewLoader() {
       <p className="text-xs font-black text-gray-400 uppercase tracking-wider">Loading view...</p>
     </div>
   );
+}
+
+/**
+ * Error Boundary: catches render-time errors that would otherwise cause a blank screen.
+ * Shows a friendly error card and allows the user to reload.
+ */
+class AppErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[AppErrorBoundary] Uncaught render error:', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center font-sans gap-4 p-6">
+          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center text-3xl">⚠️</div>
+          <h2 className="text-xl font-black text-accent tracking-tight">Something went wrong</h2>
+          <p className="text-sm text-gray-500 text-center max-w-sm">
+            A display error occurred. This is usually temporary. Please reload the page or sign out and sign back in.
+          </p>
+          <p className="text-xs font-mono text-red-500 bg-red-50 border border-red-200 rounded p-3 max-w-md break-all text-center">
+            {this.state.error?.message || 'Unknown error'}
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => window.location.reload()}
+              className="bg-primary text-white font-medium px-4 py-2 rounded-md text-sm cursor-pointer hover:bg-primary-hover transition-colors"
+            >
+              Reload Page
+            </button>
+            <button
+              onClick={() => {
+                localStorage.removeItem('kukooo_session');
+                window.location.reload();
+              }}
+              className="bg-gray-100 text-gray-700 font-medium px-4 py-2 rounded-md text-sm cursor-pointer hover:bg-gray-200 transition-colors"
+            >
+              Sign Out &amp; Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X, Plus, Minus, Check } from 'lucide-react';
 import { checkSizeAvailability } from '../../utils/productUtils';
 
@@ -25,18 +25,16 @@ export default function ProductCustomizerModal({
   });
   const [expandedPanels, setExpandedPanels] = useState({ drinks: true, sauces: true, extras: true });
 
-  useEffect(() => {
+  const [prevProduct, setPrevProduct] = useState(product);
+  if (product !== prevProduct) {
+    setPrevProduct(product);
     if (product?.has_sizes && product.sizes?.length > 0) {
-      const isCurrentValid = selectedSize && 
-        product.sizes.some(s => s.name === selectedSize.name && checkSizeAvailability(product, s, ingredients));
-      if (!isCurrentValid) {
-        const firstAvailable = product.sizes.find(s => checkSizeAvailability(product, s, ingredients));
-        setSelectedSize(firstAvailable || product.sizes[0]);
-      }
+      const firstAvailable = product.sizes.find(s => checkSizeAvailability(product, s, ingredients));
+      setSelectedSize(firstAvailable || product.sizes[0]);
     } else {
       setSelectedSize(null);
     }
-  }, [product, ingredients]);
+  }
 
   if (!product) return null;
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Bike, ShoppingBag, Trash2, Plus, Minus, ArrowLeft, Utensils, X, MapPin, Ticket, Percent, DollarSign } from 'lucide-react';
+import { Bike, ShoppingBag, Trash2, Plus, Minus, ArrowLeft, Utensils, X, MapPin, Ticket } from 'lucide-react';
 import { checkProductAvailability, checkSizeAvailability, getAvailableQuantity } from '../../utils/productUtils';
 import { generateDailyOrderId } from '../../utils/orderId';
 import { calculateDiscount } from '../../utils/voucherUtils';

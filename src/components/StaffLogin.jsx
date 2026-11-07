@@ -12,8 +12,14 @@ export default function StaffLogin({ onLogin, navigateToHome }) {
 
   const fillTestCredentials = (selectedRole) => {
     setRole(selectedRole);
-    setLoginId(`${selectedRole}@mrkukooo.com`);
-    setPassword(selectedRole);
+    if (selectedRole === 'manager') {
+      setLoginId('abh27052005@gmail.com');
+      setPassword('Ahm@d-mrkukooo1290');
+    } else {
+      // Update these once an employee account is created in Supabase Auth
+      setLoginId('employee@mrkukooo.com');
+      setPassword('employee');
+    }
     setError('');
   };
 

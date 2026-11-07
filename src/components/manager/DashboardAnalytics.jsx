@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { TrendingUp, DollarSign, ShoppingBag, BarChart3, MapPin, Ticket, Trash2, X } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { TrendingUp, DollarSign, ShoppingBag, BarChart3, MapPin, Ticket, Trash2, X, Loader2 } from 'lucide-react';
 import { getOrderDiscount } from '../../utils/voucherUtils';
+import { getOrdersByDateRange } from '../../supabase';
 
 export default function DashboardAnalytics({
   orders = [],
@@ -14,21 +15,62 @@ export default function DashboardAnalytics({
   products = [],
   foodWastage = []
 }) {
-  const [startDate, setStartDate] = useState(() => {
+  const todayDateStr = useMemo(() => {
     const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().split('T')[0];
-  });
-  const [endDate, setEndDate] = useState(() => {
-    return new Date().toISOString().split('T')[0];
-  });
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  const [startDate, setStartDate] = useState(todayDateStr);
+  const [endDate, setEndDate] = useState(todayDateStr);
+  const [historicalOrders, setHistoricalOrders] = useState(null);
+  const [isLoadingRange, setIsLoadingRange] = useState(false);
+  const analyticsCache = useRef(new Map());
   const [isWastageModalOpen, setIsWastageModalOpen] = useState(false);
 
   // Calculate dynamic branch context ID (guarantees All branches by default unless specific branch is selected)
   const activeBranchId = selectedBranchId || 'All';
+  const isTodayRange = startDate === todayDateStr && endDate === todayDateStr;
 
-  // Filter live orders by date range and selected branch context
-  const filteredOrders = orders.filter(order => {
+  // Fetch range orders on demand if viewing past period
+  useEffect(() => {
+    if (isTodayRange) {
+      return;
+    }
+
+    const cacheKey = `${startDate}_${endDate}_${activeBranchId}`;
+    if (analyticsCache.current.has(cacheKey)) {
+      setHistoricalOrders(analyticsCache.current.get(cacheKey));
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingRange(true);
+    getOrdersByDateRange(startDate, endDate, activeBranchId)
+      .then(res => {
+        if (!isMounted) return;
+        const list = Array.isArray(res) ? res : [];
+        analyticsCache.current.set(cacheKey, list);
+        setHistoricalOrders(list);
+      })
+      .catch(err => {
+        console.error("Could not fetch analytics range orders:", err);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingRange(false);
+      });
+
+    return () => { isMounted = false; };
+  }, [startDate, endDate, activeBranchId, isTodayRange]);
+
+  const activeOrdersSource = isTodayRange
+    ? orders
+    : (historicalOrders !== null ? historicalOrders : orders);
+
+  // Filter orders by date range and selected branch context
+  const filteredOrders = activeOrdersSource.filter(order => {
     // 1. Branch filter
     if (activeBranchId && activeBranchId !== 'All' && order.branch_id && order.branch_id !== activeBranchId) return false;
     
@@ -457,15 +499,53 @@ export default function DashboardAnalytics({
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="bg-transparent font-bold text-[11px] sm:text-xs border-none focus:outline-none"
+              className="bg-transparent font-bold text-[11px] sm:text-xs border-none focus:outline-none cursor-pointer"
             />
             <span className="text-gray-400 text-xs">to</span>
             <input
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="bg-transparent font-bold text-[11px] sm:text-xs border-none focus:outline-none"
+              className="bg-transparent font-bold text-[11px] sm:text-xs border-none focus:outline-none cursor-pointer"
             />
+            {isLoadingRange && (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-primary inline shrink-0" />
+            )}
+          </div>
+
+          {/* Quick preset timeline chips */}
+          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
+            {[
+              { id: 'today', label: 'Today', getDates: () => [todayDateStr, todayDateStr] },
+              { id: 'yesterday', label: 'Yesterday', getDates: () => {
+                const y = new Date(); y.setDate(y.getDate() - 1);
+                const ds = y.toISOString().split('T')[0];
+                return [ds, ds];
+              }},
+              { id: 'last7', label: '7D', getDates: () => {
+                const p = new Date(); p.setDate(p.getDate() - 6);
+                return [p.toISOString().split('T')[0], todayDateStr];
+              }},
+              { id: 'last30', label: '30D', getDates: () => {
+                const p = new Date(); p.setDate(p.getDate() - 29);
+                return [p.toISOString().split('T')[0], todayDateStr];
+              }}
+            ].map(p => {
+              const [s, e] = p.getDates();
+              const isMatch = startDate === s && endDate === e;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => { setStartDate(s); setEndDate(e); }}
+                  className={`px-2 py-1 rounded-lg text-[10px] sm:text-xs font-black transition-all cursor-pointer ${
+                    isMatch ? 'bg-secondary text-accent comic-border-sm shadow-xs' : 'text-gray-500 hover:text-accent'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
           </div>
 
           {branches.length > 0 && (
