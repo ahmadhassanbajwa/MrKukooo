@@ -312,11 +312,19 @@ export const getIngredients = async () => runDbOperation(
 export const saveIngredient = async (ingredient) => {
   const localList = JSON.parse(localStorage.getItem('kukooo_ingredients') || '[]');
   const idx = localList.findIndex(i => i.id === ingredient.id);
-  if (idx >= 0) localList[idx] = ingredient; else localList.push(ingredient);
+  const normalized = {
+    ...ingredient,
+    quantity: Number(ingredient.quantity ?? ingredient.stock_quantity ?? 0),
+    stock_quantity: Number(ingredient.stock_quantity ?? ingredient.quantity ?? 0),
+    display_unit: ingredient.display_unit || ingredient.unit || 'KG',
+    base_unit: ingredient.base_unit || 'Grams',
+    conversion_factor: Number(ingredient.conversion_factor) || 1000
+  };
+  if (idx >= 0) localList[idx] = normalized; else localList.push(normalized);
   localStorage.setItem('kukooo_ingredients', JSON.stringify(localList));
 
   return runDbOperation(
-    async () => { await supabase.from('ingredients').upsert(ingredient); },
+    async () => { await supabase.from('ingredients').upsert(normalized); },
     async () => {}
   );
 };
@@ -395,13 +403,24 @@ export const subscribeToIngredients = (callback) => {
 export const updateIngredientStock = async (id, newQuantity) => {
   const localList = JSON.parse(localStorage.getItem('kukooo_ingredients') || '[]');
   const idx = localList.findIndex(p => p.id.toString() === id.toString());
+  const parsedQty = Number(newQuantity) || 0;
   if (idx >= 0) {
-    localList[idx].quantity = parseInt(newQuantity, 10);
+    localList[idx].quantity = parsedQty;
+    localList[idx].stock_quantity = parsedQty;
     localStorage.setItem('kukooo_ingredients', JSON.stringify(localList));
   }
 
   return runDbOperation(
-    async () => { await supabase.from('ingredients').update({ quantity: parseInt(newQuantity, 10) }).eq('id', id.toString()); },
+    async () => {
+      // Update both quantity and stock_quantity so both old and new schema setups work seamlessly
+      await supabase
+        .from('ingredients')
+        .update({ 
+          quantity: parsedQty,
+          stock_quantity: parsedQty 
+        })
+        .eq('id', id.toString());
+    },
     async () => {}
   );
 };

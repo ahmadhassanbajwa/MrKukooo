@@ -12,12 +12,19 @@ export const normalizeIngredientEntry = (entry, contextName = '') => {
   if (!entry) return null;
   const fallbackQty = parseQuantityFromName(contextName);
   if (typeof entry === 'string') {
-    return { id: entry, required: true, quantity: fallbackQty };
+    return { id: entry, required: true, quantity: fallbackQty, unit_used: null };
   }
   if (typeof entry === 'object' && entry.id) {
-    const parsedQty = parseFloat(entry.quantity);
+    const parsedQty = parseFloat(entry.quantity ?? entry.required_quantity);
     const quantity = !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : fallbackQty;
-    return { id: entry.id, required: entry.required !== false, quantity };
+    const unit_used = entry.unit_used || entry.unit || null;
+    return { 
+      id: entry.id, 
+      required: entry.required !== false, 
+      quantity,
+      required_quantity: quantity,
+      unit_used 
+    };
   }
   return null;
 };

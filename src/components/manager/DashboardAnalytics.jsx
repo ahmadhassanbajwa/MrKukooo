@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { TrendingUp, DollarSign, ShoppingBag, BarChart3, MapPin, Ticket, Trash2, X, Loader2 } from 'lucide-react';
+import { TrendingUp, DollarSign, ShoppingBag, BarChart3, MapPin, Ticket, Trash2, X, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
 import { getOrderDiscount } from '../../utils/voucherUtils';
 import { getOrdersByDateRange } from '../../supabase';
 
@@ -13,6 +13,7 @@ export default function DashboardAnalytics({
   selectedBranchId,
   setSelectedBranchId,
   products = [],
+  categories = [],
   foodWastage = []
 }) {
   const todayDateStr = useMemo(() => {
@@ -29,6 +30,8 @@ export default function DashboardAnalytics({
   const [isLoadingRange, setIsLoadingRange] = useState(false);
   const analyticsCache = useRef(new Map());
   const [isWastageModalOpen, setIsWastageModalOpen] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState({});
+  const [expandedSizes, setExpandedSizes] = useState({});
 
   // Calculate dynamic branch context ID (guarantees All branches by default unless specific branch is selected)
   const activeBranchId = selectedBranchId || 'All';
@@ -204,11 +207,35 @@ export default function DashboardAnalytics({
     const displayName = rawSize && !hasSizeInName ? `${rawName} (${rawSize})` : rawName;
     const key = `${rawName.toLowerCase()}:::${rawSize.toLowerCase()}`;
 
+    // Lookup product to find category
+    const matchedProd = products.find(p => 
+      p.name && p.name.trim().toLowerCase() === rawName.toLowerCase()
+    );
+
+    let catName = 'Other';
+    if (matchedProd?.category_id) {
+      const foundCat = categories.find(cat => cat.id === matchedProd.category_id);
+      catName = foundCat?.name || matchedProd.category_id;
+    } else if (matchedProd?.category) {
+      catName = matchedProd.category;
+    } else if (rawName.toLowerCase().includes('pizza')) {
+      catName = 'Pizzas';
+    } else if (rawName.toLowerCase().includes('burger')) {
+      catName = 'Burgers';
+    } else if (rawName.toLowerCase().includes('drink') || rawName.toLowerCase().includes('cola')) {
+      catName = 'Drinks';
+    } else if (rawName.toLowerCase().includes('shawarma')) {
+      catName = 'Shawarmas';
+    } else if (rawName.toLowerCase().includes('wing')) {
+      catName = 'Wings';
+    }
+
     if (!itemCounts[key]) {
       itemCounts[key] = {
         name: rawName,
         size: rawSize,
         displayName,
+        category: catName,
         count: 0
       };
     }
@@ -270,6 +297,58 @@ export default function DashboardAnalytics({
   // Compute all ordered items sorted by count (each size listed separately)
   const allOrderedItems = Object.values(itemCounts)
     .sort((a, b) => b.count - a.count);
+
+  // Group ordered items by Category -> Size (for Pizza/sized items) -> Specific Product Flavour
+  const catMap = {};
+  Object.values(itemCounts).forEach(item => {
+    const cat = item.category || 'Other';
+    if (!catMap[cat]) {
+      catMap[cat] = {
+        name: cat,
+        totalCount: 0,
+        sizes: {} // sizeName -> { totalCount, flavours: [ { name, count } ] }
+      };
+    }
+
+    catMap[cat].totalCount += item.count;
+
+    const sizeKey = item.size ? item.size : 'Standard / Regular';
+    if (!catMap[cat].sizes[sizeKey]) {
+      catMap[cat].sizes[sizeKey] = {
+        name: sizeKey,
+        totalCount: 0,
+        flavours: []
+      };
+    }
+
+    catMap[cat].sizes[sizeKey].totalCount += item.count;
+    catMap[cat].sizes[sizeKey].flavours.push({
+      name: item.name,
+      displayName: item.displayName,
+      count: item.count
+    });
+  });
+
+  // Sort categories by totalCount descending
+  const categoryGroupedItems = Object.values(catMap)
+    .map(cat => ({
+      ...cat,
+      sizesList: Object.values(cat.sizes)
+        .map(s => ({
+          ...s,
+          flavours: s.flavours.sort((a, b) => b.count - a.count)
+        }))
+        .sort((a, b) => b.totalCount - a.totalCount)
+    }))
+    .sort((a, b) => b.totalCount - a.totalCount);
+
+  const toggleCategory = (catName) => {
+    setExpandedCategories(prev => ({ ...prev, [catName]: !prev[catName] }));
+  };
+
+  const toggleSize = (sizeKey) => {
+    setExpandedSizes(prev => ({ ...prev, [sizeKey]: !prev[sizeKey] }));
+  };
 
   const topSellingItem = allOrderedItems.length > 0 ? allOrderedItems[0].displayName : 'N/A';
 
@@ -334,38 +413,84 @@ export default function DashboardAnalytics({
       // Divider
       doc.line(15, 119, 195, 119);
       
-      // All Items Breakdown Section
+      // All Items Breakdown Section (Category-wise and Size-wise hierarchy)
       doc.setFont("helvetica", "bold");
       doc.setFontSize(12);
-      doc.text("ALL ORDERED ITEMS BREAKDOWN", 15, 129);
+      doc.text("ORDERED ITEMS BREAKDOWN (CATEGORY & SIZE-WISE)", 15, 129);
       
       doc.setFontSize(9);
-      doc.text("Product Name", 15, 137);
+      doc.text("Category / Size / Flavour", 15, 137);
       doc.text("Quantity Sold", 150, 137);
       doc.line(15, 140, 195, 140);
       
       let currentY = 147;
-      doc.setFont("helvetica", "normal");
-      
-      allOrderedItems.forEach((item) => {
-        if (currentY > 270) {
+
+      const ensurePageSpace = (neededSpace = 8) => {
+        if (currentY + neededSpace > 275) {
           doc.addPage();
           currentY = 25;
           doc.setFont("helvetica", "bold");
-          doc.text("Product Name", 15, currentY);
+          doc.setFontSize(9);
+          doc.text("Category / Size / Flavour", 15, currentY);
           doc.text("Quantity Sold", 150, currentY);
           doc.line(15, currentY + 3, 195, currentY + 3);
           currentY += 10;
-          doc.setFont("helvetica", "normal");
         }
-        doc.text(item.displayName || item.name, 15, currentY);
-        doc.text(`${item.count} pcs`, 150, currentY);
-        currentY += 7;
+      };
+      
+      categoryGroupedItems.forEach((cat) => {
+        ensurePageSpace(12);
+
+        // Level 1: Category Header (Bold with subtle gray fill bar)
+        doc.setFillColor(245, 245, 245);
+        doc.rect(15, currentY - 4.5, 180, 7.5, "F");
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(20, 20, 20);
+        doc.text(cat.name.toUpperCase(), 17, currentY);
+        doc.text(`${cat.totalCount} pcs`, 150, currentY);
+        currentY += 8;
+
+        cat.sizesList.forEach((sizeGroup) => {
+          ensurePageSpace(8);
+          const isMultiFlavour = sizeGroup.flavours.length > 1 || (sizeGroup.flavours[0]?.name && sizeGroup.flavours[0]?.name !== sizeGroup.name);
+
+          // Level 2: Size / Item Header
+          doc.setFont("helvetica", isMultiFlavour ? "bold" : "normal");
+          doc.setFontSize(9);
+          doc.setTextColor(50, 50, 50);
+          
+          if (isMultiFlavour) {
+            doc.text(`• ${sizeGroup.name} (${sizeGroup.flavours.length} flavours)`, 22, currentY);
+          } else {
+            doc.text(`• ${sizeGroup.flavours[0]?.name || sizeGroup.name}`, 22, currentY);
+          }
+          doc.text(`${sizeGroup.totalCount} pcs`, 150, currentY);
+          currentY += 6;
+
+          // Level 3: Specific Flavours (if multi-flavour size like 3 Fajita, 5 Tikka, 2 Cheese Lover)
+          if (isMultiFlavour) {
+            sizeGroup.flavours.forEach((flavour) => {
+              ensurePageSpace(6);
+              doc.setFont("helvetica", "normal");
+              doc.setFontSize(8.5);
+              doc.setTextColor(90, 90, 90);
+              doc.text(`- ${flavour.name}`, 28, currentY);
+              doc.text(`${flavour.count} pcs`, 150, currentY);
+              currentY += 5;
+            });
+          }
+        });
+
+        currentY += 3;
       });
+
+      doc.setTextColor(17, 17, 17);
+      ensurePageSpace(10);
       
       // Divider before Ledger
-      doc.line(15, currentY + 3, 195, currentY + 3);
-      currentY += 13;
+      doc.line(15, currentY + 1, 195, currentY + 1);
+      currentY += 10;
 
       // Orders Table Headers
       doc.setFont("helvetica", "bold");
@@ -685,23 +810,112 @@ export default function DashboardAnalytics({
               </span>
             )}
           </div>
-          {allOrderedItems.length > 0 ? (
-            <div className="space-y-3.5 overflow-y-auto max-h-72 pr-1">
-              {allOrderedItems.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="w-5.5 h-5.5 rounded-lg bg-gray-150 flex items-center justify-center font-black text-xs text-accent/60 shrink-0">
-                      {idx + 1}
-                    </span>
-                    <span className="text-xs font-black text-accent leading-snug truncate">
-                      {item.name} {item.size && <span className="text-primary font-bold">({item.size})</span>}
-                    </span>
+          {categoryGroupedItems.length > 0 ? (
+            <div className="space-y-2.5 overflow-y-auto max-h-80 pr-1">
+              {categoryGroupedItems.map((cat, catIdx) => {
+                const isCatExpanded = !!expandedCategories[cat.name];
+                return (
+                  <div key={cat.name} className="border border-gray-150 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                    {/* Level 1: Category Row */}
+                    <div 
+                      onClick={() => toggleCategory(cat.name)}
+                      className="p-3 bg-gray-50/80 hover:bg-gray-100 flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <button
+                          type="button"
+                          className="w-5 h-5 rounded-md bg-white border border-gray-200 flex items-center justify-center text-gray-500 shrink-0"
+                          title={isCatExpanded ? "Collapse Category" : "Expand Category"}
+                        >
+                          {isCatExpanded ? (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        <span className="w-5.5 h-5.5 rounded-lg bg-gray-200 flex items-center justify-center font-black text-xs text-accent/70 shrink-0">
+                          {catIdx + 1}
+                        </span>
+                        <span className="text-xs font-black text-accent truncate">
+                          {cat.name}
+                        </span>
+                      </div>
+                      <span className="text-xs bg-secondary/20 text-accent px-2.5 py-1 rounded-xl font-black shrink-0">
+                        {cat.totalCount} pcs
+                      </span>
+                    </div>
+
+                    {/* Level 2: Sized Groups under this Category */}
+                    {isCatExpanded && (
+                      <div className="p-2.5 space-y-2 bg-white divide-y divide-gray-100">
+                        {cat.sizesList.map((sizeGroup) => {
+                          const sizeKey = `${cat.name}___${sizeGroup.name}`;
+                          const isSizeExpanded = !!expandedSizes[sizeKey];
+                          const hasFlavours = sizeGroup.flavours.length > 0;
+                          const isMultiFlavour = sizeGroup.flavours.length > 1 || (sizeGroup.flavours[0]?.name && sizeGroup.flavours[0]?.name !== sizeGroup.name);
+
+                          return (
+                            <div key={sizeGroup.name} className="pt-2 first:pt-0">
+                              {/* Sized Header (e.g. "Small: 10 pcs") */}
+                              <div
+                                onClick={() => isMultiFlavour && toggleSize(sizeKey)}
+                                className={`flex items-center justify-between gap-2 p-1.5 rounded-xl transition-colors ${
+                                  isMultiFlavour ? 'cursor-pointer hover:bg-blue-50/60' : ''
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0 pl-1">
+                                  {isMultiFlavour ? (
+                                    <button
+                                      type="button"
+                                      className="w-4 h-4 rounded text-blue-600 flex items-center justify-center shrink-0"
+                                      title={isSizeExpanded ? "Collapse Flavours" : "Expand Flavours"}
+                                    >
+                                      {isSizeExpanded ? (
+                                        <ChevronDown className="w-3 h-3 text-blue-600" />
+                                      ) : (
+                                        <ChevronRight className="w-3 h-3 text-blue-500" />
+                                      )}
+                                    </button>
+                                  ) : (
+                                    <span className="w-4 h-4 flex items-center justify-center shrink-0 text-gray-300">•</span>
+                                  )}
+                                  <span className="text-xs font-extrabold text-gray-800 truncate">
+                                    {sizeGroup.name}
+                                    {isMultiFlavour && (
+                                      <span className="text-[10px] text-gray-400 font-bold ml-1.5">
+                                        ({sizeGroup.flavours.length} flavours)
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                                <span className="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-lg font-black shrink-0">
+                                  {sizeGroup.totalCount} pcs
+                                </span>
+                              </div>
+
+                              {/* Level 3: Flavour / Specific Product Breakdown (3 Fajita, 5 Tikka, 2 Cheese Lover) */}
+                              {isMultiFlavour && isSizeExpanded && hasFlavours && (
+                                <div className="mt-1.5 pl-6 pr-1 space-y-1 bg-gray-50/50 rounded-xl p-2 border border-gray-150">
+                                  {sizeGroup.flavours.map((flavour, fIdx) => (
+                                    <div key={fIdx} className="flex items-center justify-between text-xs py-1 border-b border-gray-100 last:border-b-0">
+                                      <span className="font-bold text-gray-700 truncate pr-2">
+                                        {flavour.name}
+                                      </span>
+                                      <span className="font-black text-accent text-[11px] shrink-0 bg-white px-2 py-0.5 rounded border border-gray-200">
+                                        {flavour.count} pcs
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                  <span className="text-xs bg-secondary/15 text-accent px-2.5 py-1 rounded-xl font-black shrink-0">
-                    {item.count} pcs
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="text-center py-12 text-gray-400 text-xs font-bold uppercase tracking-wider">

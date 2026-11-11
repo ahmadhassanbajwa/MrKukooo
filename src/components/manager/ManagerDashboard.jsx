@@ -154,6 +154,7 @@ export default function ManagerDashboard({
               products={products}
               categories={categories}
               ingredients={ingredients}
+              orders={orders}
               saveIngredient={saveIngredient}
               deleteIngredient={deleteIngredient}
               updateIngredientStock={updateIngredientStock}
@@ -190,6 +191,7 @@ export default function ManagerDashboard({
             selectedBranchId={selectedBranchId}
             setSelectedBranchId={setSelectedBranchId}
             products={products}
+            categories={categories}
             foodWastage={foodWastage}
           />
         );

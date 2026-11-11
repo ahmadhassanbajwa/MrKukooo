@@ -682,6 +682,7 @@ export default function EmployeeDashboard({
             products={products} 
             categories={categories} 
             ingredients={ingredients}
+            orders={orders}
             saveIngredient={saveIngredient}
             deleteIngredient={deleteIngredient}
             updateIngredientStock={updateIngredientStock}

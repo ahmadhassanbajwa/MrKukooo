@@ -1,17 +1,24 @@
 import { useState, useMemo } from 'react';
-import { Package, Search, Check, AlertTriangle, Edit3, Trash2, Plus, Link as LinkIcon, Box, Star, X, Info } from 'lucide-react';
+import { Package, Search, Check, AlertTriangle, Edit3, Trash2, Plus, Link as LinkIcon, Box, Star, X, Info, BarChart2 } from 'lucide-react';
 import { 
   normalizeIngredientEntry, 
   getIngredientId, 
   parseQuantityFromName,
   getAvailableQuantity
 } from '../utils/productUtils';
+import { 
+  UNIT_CONFIGS, 
+  getIngredientUnitConfig, 
+  formatDualUnitStock 
+} from '../utils/unitUtils';
 import { getIngredients, getProducts } from '../supabase';
+import IngredientAnalyticsModal from './manager/IngredientAnalyticsModal';
 
 export default function InventoryManager({ 
   products = [], 
   categories = [], 
   ingredients = [],
+  orders = [],
   saveIngredient,
   deleteIngredient,
   updateIngredientStock,
@@ -25,12 +32,16 @@ export default function InventoryManager({
   const [selectedIngredientId, setSelectedIngredientId] = useState(null);
   const [newIngredientName, setNewIngredientName] = useState('');
   const [newIngredientCost, setNewIngredientCost] = useState('');
+  const [newIngredientUnit, setNewIngredientUnit] = useState('KG');
   const [editQuantities, setEditQuantities] = useState({});
   const [savingState, setSavingState] = useState({});
   const [renamingIngredientId, setRenamingIngredientId] = useState(null);
   const [renamingIngredientName, setRenamingIngredientName] = useState('');
   const [renamingIngredientCost, setRenamingIngredientCost] = useState('');
   const [isSavingIngredientDetails, setIsSavingIngredientDetails] = useState(false);
+
+  // Analytics Modal State
+  const [analyticsIngredient, setAnalyticsIngredient] = useState(null);
 
   // State for Food Wastage Management
   const [isWastageModalOpen, setIsWastageModalOpen] = useState(false);
@@ -193,14 +204,21 @@ export default function InventoryManager({
   };
 
   // Helper to add or update an ingredient entry in a list
-  const upsertIngredientInList = (list = [], ingId, required = true, quantity = null, contextName = '') => {
+  const upsertIngredientInList = (list = [], ingId, required = true, quantity = null, contextName = '', unitUsed = null) => {
     const existing = getEntryForIngredient(list, ingId, contextName);
     const finalQty = quantity !== null && quantity !== undefined
-      ? Math.max(1, parseInt(quantity, 10) || 1)
+      ? Math.max(1, parseFloat(quantity) || 1)
       : (existing?.quantity || parseQuantityFromName(contextName) || 1);
+    const finalUnit = unitUsed || existing?.unit_used || null;
 
     const filtered = (list || []).filter(entry => getIngredientId(entry) !== ingId);
-    return [...filtered, { id: ingId, required, quantity: finalQty }];
+    return [...filtered, { 
+      id: ingId, 
+      required, 
+      quantity: finalQty, 
+      required_quantity: finalQty, 
+      unit_used: finalUnit 
+    }];
   };
 
   // Get portion quantity for unsized product
@@ -208,6 +226,13 @@ export default function InventoryManager({
     if (!selectedIngredientId) return 1;
     const entry = getEntryForIngredient(product.ingredient_ids, selectedIngredientId, product.name);
     return entry ? (entry.quantity || 1) : parseQuantityFromName(product.name);
+  };
+
+  // Get unit used for unsized product
+  const getProductUnitUsed = (product) => {
+    if (!selectedIngredientId) return '';
+    const entry = getEntryForIngredient(product.ingredient_ids, selectedIngredientId, product.name);
+    return entry?.unit_used || '';
   };
 
   // Get portion quantity for sized product
@@ -218,6 +243,15 @@ export default function InventoryManager({
     const prodEntry = getEntryForIngredient(product.ingredient_ids, selectedIngredientId, product.name);
     if (prodEntry) return prodEntry.quantity || parseQuantityFromName(product.name);
     return parseQuantityFromName(size.name);
+  };
+
+  // Get unit used for sized product
+  const getSizeUnitUsed = (product, size) => {
+    if (!selectedIngredientId) return '';
+    const sizeEntry = getEntryForIngredient(size.ingredient_ids, selectedIngredientId, size.name);
+    if (sizeEntry?.unit_used) return sizeEntry.unit_used;
+    const prodEntry = getEntryForIngredient(product.ingredient_ids, selectedIngredientId, product.name);
+    return prodEntry?.unit_used || '';
   };
 
   // Check if an unsized product is mapped
@@ -299,10 +333,15 @@ export default function InventoryManager({
   const handleAddIngredient = async () => {
     if (!newIngredientName.trim()) return;
     const newId = 'ing-' + Date.now();
+    const unitConfig = UNIT_CONFIGS[newIngredientUnit] || UNIT_CONFIGS.KG;
     const newIng = {
       id: newId,
       name: newIngredientName.trim(),
       quantity: 0,
+      stock_quantity: 0,
+      display_unit: unitConfig.display_unit,
+      base_unit: unitConfig.base_unit,
+      conversion_factor: unitConfig.conversion_factor,
       cost_per_unit: Math.max(0, parseFloat(newIngredientCost) || 0)
     };
     await saveIngredient(newIng);
@@ -312,13 +351,13 @@ export default function InventoryManager({
   };
 
   const handleQuantityChange = (id, value) => {
-    const num = parseInt(value, 10);
+    const num = parseFloat(value);
     setEditQuantities(prev => ({ ...prev, [id]: isNaN(num) ? '' : num }));
   };
 
   const handleSaveStock = async (id) => {
     if (editQuantities[id] === undefined || editQuantities[id] === '') return;
-    const qty = parseInt(editQuantities[id], 10);
+    const qty = Math.max(0, parseFloat(editQuantities[id]) || 0);
     setSavingState(prev => ({ ...prev, [id]: 'saving' }));
     try {
       await updateIngredientStock(id, qty);
@@ -415,9 +454,11 @@ export default function InventoryManager({
   const handleToggleProductMapping = async (product) => {
     if (!selectedIngredientId) return;
     const isMapped = isProductMapped(product);
+    const unitConf = getIngredientUnitConfig(selectedIngredient);
+    const defaultUnit = unitConf.base_unit;
     const newIds = isMapped
       ? removeIngredientFromList(product.ingredient_ids, selectedIngredientId)
-      : upsertIngredientInList(product.ingredient_ids, selectedIngredientId, true, null, product.name);
+      : upsertIngredientInList(product.ingredient_ids, selectedIngredientId, true, null, product.name, defaultUnit);
     await saveProduct({ ...product, ingredient_ids: newIds });
   };
 
@@ -426,7 +467,8 @@ export default function InventoryManager({
     if (!selectedIngredientId) return;
     const currentReq = isProductRequired(product);
     const curPortion = getProductPortion(product);
-    const newIds = upsertIngredientInList(product.ingredient_ids, selectedIngredientId, !currentReq, curPortion, product.name);
+    const curUnit = getProductUnitUsed(product);
+    const newIds = upsertIngredientInList(product.ingredient_ids, selectedIngredientId, !currentReq, curPortion, product.name, curUnit);
     await saveProduct({ ...product, ingredient_ids: newIds });
   };
 
@@ -434,8 +476,18 @@ export default function InventoryManager({
   const handleUpdateProductPortion = async (product, newQuantity) => {
     if (!selectedIngredientId) return;
     const req = isProductRequired(product);
-    const parsed = Math.max(1, parseInt(newQuantity, 10) || 1);
-    const newIds = upsertIngredientInList(product.ingredient_ids, selectedIngredientId, req, parsed, product.name);
+    const parsed = Math.max(1, parseFloat(newQuantity) || 1);
+    const curUnit = getProductUnitUsed(product);
+    const newIds = upsertIngredientInList(product.ingredient_ids, selectedIngredientId, req, parsed, product.name, curUnit);
+    await saveProduct({ ...product, ingredient_ids: newIds });
+  };
+
+  // For products without sizes: update portion unit
+  const handleUpdateProductUnit = async (product, newUnit) => {
+    if (!selectedIngredientId) return;
+    const req = isProductRequired(product);
+    const curPortion = getProductPortion(product);
+    const newIds = upsertIngredientInList(product.ingredient_ids, selectedIngredientId, req, curPortion, product.name, newUnit);
     await saveProduct({ ...product, ingredient_ids: newIds });
   };
 
@@ -444,6 +496,8 @@ export default function InventoryManager({
     if (!selectedIngredientId) return;
     const targetSize = (product.sizes || []).find(s => s.name === targetSizeName);
     const isCurrentlyMapped = targetSize ? isSizeMapped(product, targetSize) : false;
+    const unitConf = getIngredientUnitConfig(selectedIngredient);
+    const defaultUnit = unitConf.base_unit;
 
     const newSizes = (product.sizes || []).map(s => {
       if (s.name !== targetSizeName) return s;
@@ -452,7 +506,7 @@ export default function InventoryManager({
         ...s,
         ingredient_ids: isCurrentlyMapped
           ? removeIngredientFromList(curIds, selectedIngredientId)
-          : upsertIngredientInList(curIds, selectedIngredientId, true, null, s.name)
+          : upsertIngredientInList(curIds, selectedIngredientId, true, null, s.name, defaultUnit)
       };
     });
 
@@ -474,11 +528,12 @@ export default function InventoryManager({
 
     const currentReq = isSizeRequired(product, targetSize);
     const curPortion = getSizePortion(product, targetSize);
+    const curUnit = getSizeUnitUsed(product, targetSize);
     const newSizes = (product.sizes || []).map(s => {
       if (s.name !== targetSizeName) return s;
       return {
         ...s,
-        ingredient_ids: upsertIngredientInList(s.ingredient_ids, selectedIngredientId, !currentReq, curPortion, s.name)
+        ingredient_ids: upsertIngredientInList(s.ingredient_ids, selectedIngredientId, !currentReq, curPortion, s.name, curUnit)
       };
     });
 
@@ -498,12 +553,38 @@ export default function InventoryManager({
     if (!targetSize) return;
 
     const req = isSizeRequired(product, targetSize);
-    const parsed = Math.max(1, parseInt(newQuantity, 10) || 1);
+    const parsed = Math.max(1, parseFloat(newQuantity) || 1);
+    const curUnit = getSizeUnitUsed(product, targetSize);
     const newSizes = (product.sizes || []).map(s => {
       if (s.name !== targetSizeName) return s;
       return {
         ...s,
-        ingredient_ids: upsertIngredientInList(s.ingredient_ids, selectedIngredientId, req, parsed, s.name)
+        ingredient_ids: upsertIngredientInList(s.ingredient_ids, selectedIngredientId, req, parsed, s.name, curUnit)
+      };
+    });
+
+    const newProductIngIds = removeIngredientFromList(product.ingredient_ids, selectedIngredientId);
+
+    await saveProduct({
+      ...product,
+      ingredient_ids: newProductIngIds,
+      sizes: newSizes
+    });
+  };
+
+  // For products with sizes: update portion unit for a single size
+  const handleUpdateSizeUnit = async (product, targetSizeName, newUnit) => {
+    if (!selectedIngredientId) return;
+    const targetSize = (product.sizes || []).find(s => s.name === targetSizeName);
+    if (!targetSize) return;
+
+    const req = isSizeRequired(product, targetSize);
+    const curPortion = getSizePortion(product, targetSize);
+    const newSizes = (product.sizes || []).map(s => {
+      if (s.name !== targetSizeName) return s;
+      return {
+        ...s,
+        ingredient_ids: upsertIngredientInList(s.ingredient_ids, selectedIngredientId, req, curPortion, s.name, newUnit)
       };
     });
 
@@ -625,19 +706,33 @@ export default function InventoryManager({
                     onKeyDown={(e) => e.key === 'Enter' && handleAddIngredient()}
                     className="w-full bg-white border-2 border-gray-200 px-3 py-2 rounded-xl text-sm font-bold focus:outline-none focus:border-primary transition-colors"
                   />
-                  <label className="flex items-center gap-2 text-[11px] font-bold text-gray-500">
-                    Cost per unit (Rs.)
-                    <input
-                      type="number"
-                      min="0"
-                      step="any"
-                      placeholder="Enter cost"
-                      value={newIngredientCost}
-                      onChange={(e) => setNewIngredientCost(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleAddIngredient()}
-                      className="min-w-0 flex-1 bg-white border-2 border-gray-200 px-3 py-1.5 rounded-lg text-xs font-bold text-accent focus:outline-none focus:border-primary transition-colors"
-                    />
-                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex flex-col text-[10px] font-bold text-gray-500">
+                      Unit of Measurement
+                      <select
+                        value={newIngredientUnit}
+                        onChange={(e) => setNewIngredientUnit(e.target.value)}
+                        className="bg-white border-2 border-gray-200 px-2 py-1.5 rounded-lg text-xs font-bold text-accent focus:outline-none focus:border-primary transition-colors mt-0.5"
+                      >
+                        {Object.keys(UNIT_CONFIGS).map(u => (
+                          <option key={u} value={u}>{u} ({UNIT_CONFIGS[u].base_unit})</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col text-[10px] font-bold text-gray-500">
+                      Cost per unit (Rs.)
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="Cost"
+                        value={newIngredientCost}
+                        onChange={(e) => setNewIngredientCost(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddIngredient()}
+                        className="bg-white border-2 border-gray-200 px-2 py-1.5 rounded-lg text-xs font-bold text-accent focus:outline-none focus:border-primary transition-colors mt-0.5"
+                      />
+                    </label>
+                  </div>
                 </div>
                 <button
                   onClick={handleAddIngredient}
@@ -722,6 +817,17 @@ export default function InventoryManager({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            setAnalyticsIngredient(ing);
+                          }}
+                          title="📊 View Movement & Analytics"
+                          className="p-1 text-blue-600 hover:text-blue-800 rounded-md bg-blue-50 hover:bg-blue-100 transition-colors shrink-0 cursor-pointer flex items-center gap-1 text-[10px] font-black"
+                        >
+                          <BarChart2 className="w-3 h-3" />
+                          <span>Analytics</span>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleStartRename(ing);
                           }}
                           title="Rename ingredient"
@@ -740,8 +846,8 @@ export default function InventoryManager({
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
-                      <span className="text-[11px] font-bold text-gray-500 uppercase">
-                        Stock: <span className={isSoldOut ? 'text-red-500' : 'text-green-600'}>{ing.quantity || 0}</span>
+                      <span className="text-[11px] font-bold text-gray-500 uppercase mt-0.5">
+                        STOCK: <span className={isSoldOut ? 'text-red-500' : 'text-green-600'}>{formatDualUnitStock(ing.stock_quantity ?? ing.quantity ?? 0, ing)}</span>
                         <span className="ml-2 normal-case">Cost: <span className="text-accent">{ing.cost_per_unit ?? ing.cost ?? 0}</span></span>
                       </span>
                     </div>
@@ -876,44 +982,52 @@ export default function InventoryManager({
 
                         <div className="flex flex-wrap gap-1.5 shrink-0 justify-end max-w-[55%]">
                           {sizes ? (
-                            sizes.map((s, sIdx) => (
-                              <span 
-                                key={sIdx} 
-                                className={`text-[10px] font-black px-2 py-0.5 rounded-md border flex items-center gap-1.5 ${
-                                  s.required 
-                                    ? 'bg-amber-50 text-amber-900 border-amber-300' 
-                                    : 'bg-blue-50 text-blue-700 border-blue-200'
-                                }`}
-                              >
-                                <span>{s.name}</span>
-                                <span className="text-[9px] font-black bg-white/90 px-1 py-0.2 rounded border border-gray-200 text-accent" title={`${s.quantity || 1} units per order`}>
-                                  {s.quantity || 1}x
+                            sizes.map((s, sIdx) => {
+                              const sUnit = s.unit_used || getIngredientUnitConfig(selectedIngredient).base_unit;
+                              return (
+                                <span 
+                                  key={sIdx} 
+                                  className={`text-[10px] font-black px-2 py-0.5 rounded-md border flex items-center gap-1.5 ${
+                                    s.required 
+                                      ? 'bg-amber-50 text-amber-900 border-amber-300' 
+                                      : 'bg-blue-50 text-blue-700 border-blue-200'
+                                  }`}
+                                >
+                                  <span>{s.name}</span>
+                                  <span className="text-[9px] font-black bg-white/90 px-1 py-0.2 rounded border border-gray-200 text-accent" title={`Requires ${s.quantity || 1} ${sUnit} per order`}>
+                                    Requires {s.quantity || 1}{sUnit}
+                                  </span>
+                                  <span className={`text-[8px] uppercase tracking-wider px-1 py-0.2 rounded font-extrabold ${
+                                    s.required ? 'bg-amber-200 text-amber-900' : 'bg-blue-100 text-blue-800'
+                                  }`}>
+                                    {s.required ? 'Req' : 'Opt'}
+                                  </span>
                                 </span>
-                                <span className={`text-[8px] uppercase tracking-wider px-1 py-0.2 rounded font-extrabold ${
-                                  s.required ? 'bg-amber-200 text-amber-900' : 'bg-blue-100 text-blue-800'
-                                }`}>
-                                  {s.required ? 'Req' : 'Opt'}
-                                </span>
-                              </span>
-                            ))
+                              );
+                            })
                           ) : (
-                            <span 
-                              className={`text-[10px] font-black px-2.5 py-0.5 rounded-md border flex items-center gap-1.5 ${
-                                required 
-                                  ? 'bg-amber-50 text-amber-900 border-amber-300' 
-                                  : 'bg-blue-50 text-blue-700 border-blue-200'
-                              }`}
-                            >
-                              <span>Entire Item</span>
-                              <span className="text-[9px] font-black bg-white/90 px-1 py-0.2 rounded border border-gray-200 text-accent" title={`${quantity || 1} units per order`}>
-                                {quantity || 1}x
-                              </span>
-                              <span className={`text-[8px] uppercase tracking-wider px-1 py-0.2 rounded font-extrabold ${
-                                required ? 'bg-amber-200 text-amber-900' : 'bg-blue-100 text-blue-800'
-                              }`}>
-                                {required ? 'Req' : 'Opt'}
-                              </span>
-                            </span>
+                            (() => {
+                              const pUnit = (mappedItems.find(m => m.product.id === product.id)?.quantity) ? (product.ingredient_ids?.find(e => getIngredientId(e) === selectedIngredientId)?.unit_used || getIngredientUnitConfig(selectedIngredient).base_unit) : getIngredientUnitConfig(selectedIngredient).base_unit;
+                              return (
+                                <span 
+                                  className={`text-[10px] font-black px-2.5 py-0.5 rounded-md border flex items-center gap-1.5 ${
+                                    required 
+                                      ? 'bg-amber-50 text-amber-900 border-amber-300' 
+                                      : 'bg-blue-50 text-blue-700 border-blue-200'
+                                  }`}
+                                >
+                                  <span>Entire Item</span>
+                                  <span className="text-[9px] font-black bg-white/90 px-1 py-0.2 rounded border border-gray-200 text-accent" title={`Requires ${quantity || 1} ${pUnit} per order`}>
+                                    Requires {quantity || 1}{pUnit}
+                                  </span>
+                                  <span className={`text-[8px] uppercase tracking-wider px-1 py-0.2 rounded font-extrabold ${
+                                    required ? 'bg-amber-200 text-amber-900' : 'bg-blue-100 text-blue-800'
+                                  }`}>
+                                    {required ? 'Req' : 'Opt'}
+                                  </span>
+                                </span>
+                              );
+                            })()
                           )}
                         </div>
                       </div>
@@ -1018,9 +1132,17 @@ export default function InventoryManager({
                                 min="1"
                                 value={getProductPortion(p)}
                                 onChange={(e) => handleUpdateProductPortion(p, e.target.value)}
-                                className="w-9 text-xs font-black text-center text-accent focus:outline-none focus:text-primary"
+                                className="w-12 text-xs font-black text-center text-accent focus:outline-none focus:text-primary"
                               />
-                              <span className="text-[10px] font-bold text-gray-400">x</span>
+                              <select
+                                value={getProductUnitUsed(p) || getIngredientUnitConfig(selectedIngredient).base_unit}
+                                onChange={(e) => handleUpdateProductUnit(p, e.target.value)}
+                                className="text-[10px] font-black text-gray-600 bg-transparent focus:outline-none cursor-pointer"
+                              >
+                                {getIngredientUnitConfig(selectedIngredient).supported_units.map(u => (
+                                  <option key={u} value={u}>{u}</option>
+                                ))}
+                              </select>
                             </div>
 
                             <button
@@ -1151,16 +1273,26 @@ export default function InventoryManager({
                               <div className={`h-4 w-[1px] ${req ? 'bg-primary/30' : 'bg-blue-200'}`} />
 
                               {/* Portion quantity input */}
-                              <div className="flex items-center px-1.5 bg-white/70 hover:bg-white transition-colors" title="Portion: units of this ingredient used for this size">
+                              <div className="flex items-center px-1.5 bg-white/70 hover:bg-white transition-colors gap-1" title="Portion: quantity and unit used for this size">
+                                <span className="text-[9px] font-bold text-gray-400 uppercase">Qty:</span>
                                 <input
                                   type="number"
                                   min="1"
                                   value={getSizePortion(p, s)}
                                   onClick={(e) => e.stopPropagation()}
                                   onChange={(e) => handleUpdateSizePortion(p, s.name, e.target.value)}
-                                  className="w-8 text-[11px] font-black text-center text-accent focus:outline-none focus:text-primary"
+                                  className="w-10 text-[11px] font-black text-center text-accent focus:outline-none focus:text-primary"
                                 />
-                                <span className="text-[9px] font-bold text-gray-400">x</span>
+                                <select
+                                  value={getSizeUnitUsed(p, s) || getIngredientUnitConfig(selectedIngredient).base_unit}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => handleUpdateSizeUnit(p, s.name, e.target.value)}
+                                  className="text-[9px] font-black text-gray-600 bg-transparent focus:outline-none cursor-pointer"
+                                >
+                                  {getIngredientUnitConfig(selectedIngredient).supported_units.map(u => (
+                                    <option key={u} value={u}>{u}</option>
+                                  ))}
+                                </select>
                               </div>
 
                               <div className={`h-4 w-[1px] ${req ? 'bg-primary/30' : 'bg-blue-200'}`} />
@@ -1525,6 +1657,16 @@ export default function InventoryManager({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Ingredient Movement & Analytics Modal */}
+      {analyticsIngredient && (
+        <IngredientAnalyticsModal
+          ingredient={analyticsIngredient}
+          orders={orders}
+          foodWastage={foodWastage}
+          onClose={() => setAnalyticsIngredient(null)}
+        />
       )}
     </div>
   );
