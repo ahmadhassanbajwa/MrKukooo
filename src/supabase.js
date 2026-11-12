@@ -57,8 +57,8 @@ export const getTodayDateRange = () => {
   const todayDateStr = `${year}-${month}-${day}`;
   return {
     todayDateStr,
-    startOfToday: `${todayDateStr}T00:00:00`,
-    endOfToday: `${todayDateStr}T23:59:59.999`
+    startOfToday: new Date(year, now.getMonth(), now.getDate()).toISOString(),
+    endOfToday: new Date(year, now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString()
   };
 };
 
@@ -703,11 +703,18 @@ export const fetchOrdersFromSupabase = async ({ startDate, endDate, branchId } =
   // On-Demand Date Filtering:
   // If specific range provided, query between start and end of those dates
   if (startDate && endDate) {
+    const rangeStart = new Date(`${startDate}T00:00:00`);
+    const rangeEnd = new Date(`${endDate}T23:59:59.999`);
+    if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+      throw new Error('Invalid order date range.');
+    }
     query = query
-      .gte('timestamp', `${startDate}T00:00:00`)
-      .lte('timestamp', `${endDate}T23:59:59.999`);
+      .gte('timestamp', rangeStart.toISOString())
+      .lte('timestamp', rangeEnd.toISOString());
   } else if (startDate) {
-    query = query.gte('timestamp', `${startDate}T00:00:00`);
+    const rangeStart = new Date(`${startDate}T00:00:00`);
+    if (Number.isNaN(rangeStart.getTime())) throw new Error('Invalid order start date.');
+    query = query.gte('timestamp', rangeStart.toISOString());
   } else {
     // Default to TODAY's orders only (saving 95%+ bandwidth)
     const { startOfToday } = getTodayDateRange();

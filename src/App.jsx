@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, Suspense, Component } 
 import { 
   isSupabaseConfigured,
   getAuthenticatedStaffRole,
+  getTodayDateRange,
   signOutStaff,
   seedDatabaseIfEmpty,
   INITIAL_CATEGORIES,
@@ -101,6 +102,41 @@ const clearStaffCachedData = () => {
   ].forEach(key => localStorage.removeItem(key));
 };
 
+const getDateKey = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const getDateRangeKeys = ({ startDate, endDate }) => {
+  const dates = [];
+  const cursor = new Date(`${startDate}T00:00:00`);
+  const lastDate = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(cursor.getTime()) || Number.isNaN(lastDate.getTime()) || cursor > lastDate) return dates;
+  while (cursor <= lastDate) {
+    dates.push(getDateKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+};
+
+const toDateRanges = (dates) => {
+  const ranges = [];
+  for (const date of dates) {
+    const lastRange = ranges[ranges.length - 1];
+    if (lastRange) {
+      const nextDay = new Date(`${lastRange.endDate}T00:00:00`);
+      nextDay.setDate(nextDay.getDate() + 1);
+      if (getDateKey(nextDay) === date) {
+        lastRange.endDate = date;
+        continue;
+      }
+    }
+    ranges.push({ startDate: date, endDate: date });
+  }
+  return ranges;
+};
+
 export default function App() {
   // Stale-While-Revalidate: hydrate instantly from cache or initial defaults (0ms wait)
   const [categories, setCategories] = useState(() => getCachedData('kukooo_categories', INITIAL_CATEGORIES));
@@ -112,17 +148,52 @@ export default function App() {
   const ordersFetchVersion = useRef(0);
   const [ordersLoadStatus, setOrdersLoadStatus] = useState('loading');
   const [ordersLoadError, setOrdersLoadError] = useState('');
-  const refreshOrders = useCallback(async () => {
+  const ordersRangeRef = useRef(null);
+  const loadedOrderDatesRef = useRef(new Set());
+  const refreshOrders = useCallback(async (range, { force = false } = {}) => {
+    const requestedRange = range || ordersRangeRef.current;
+    if (range) ordersRangeRef.current = range;
+    const { todayDateStr } = getTodayDateRange();
+    const queryRange = requestedRange || { startDate: todayDateStr, endDate: todayDateStr };
+    const requestedDates = getDateRangeKeys(queryRange);
+    if (requestedDates.length === 0) {
+      setOrdersLoadError('Invalid order date range.');
+      setOrdersLoadStatus('error');
+      return;
+    }
+    if (requestedDates.length > 7) {
+      setOrdersLoadError('Order history is limited to a maximum of seven days.');
+      setOrdersLoadStatus('error');
+      return;
+    }
+    const missingDates = force
+      ? requestedDates
+      : requestedDates.filter(date => !loadedOrderDatesRef.current.has(date));
+    if (missingDates.length === 0) {
+      setOrdersLoadError('');
+      setOrdersLoadStatus('loaded');
+      return;
+    }
+
     const requestVersion = ++ordersFetchVersion.current;
     setOrdersLoadStatus('loading');
     setOrdersLoadError('');
     try {
-      const updatedOrders = await getOrders();
-      if (!Array.isArray(updatedOrders)) {
+      const fetchedOrders = await Promise.all(toDateRanges(missingDates).map(getOrders));
+      if (fetchedOrders.some(result => !Array.isArray(result))) {
         throw new Error('Supabase did not return an order list. Check the staff session and database permissions.');
       }
+      const updatedOrders = fetchedOrders.flat();
       if (requestVersion === ordersFetchVersion.current) {
-        setOrders(updatedOrders);
+        requestedDates.forEach(date => loadedOrderDatesRef.current.add(date));
+        setOrders(previous => {
+          const byId = new Map();
+          previous
+            .filter(order => !force || !requestedDates.includes(getDateKey(order.timestamp)))
+            .forEach(order => byId.set(order.order_id, order));
+          updatedOrders.forEach(order => byId.set(order.order_id, order));
+          return [...byId.values()].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        });
         setOrdersLoadStatus('loaded');
       }
     } catch (error) {
@@ -206,7 +277,6 @@ export default function App() {
     const initializeAppBackend = async () => {
       // Run database seed check in background
       seedDatabaseIfEmpty();
-      if (staffSession) refreshOrders();
 
       const results = await Promise.allSettled([
         getCategories(),
@@ -248,8 +318,13 @@ export default function App() {
     if (staffSession) {
       unsubscribeOrders = subscribeToOrders((updatedOrders) => {
         if (isMounted && Array.isArray(updatedOrders)) {
-          ordersFetchVersion.current += 1;
-          setOrders(updatedOrders);
+          loadedOrderDatesRef.current.add(getTodayDateRange().todayDateStr);
+          if (!ordersRangeRef.current) ordersFetchVersion.current += 1;
+          setOrders(previous => {
+            const byId = new Map(previous.map(order => [order.order_id, order]));
+            updatedOrders.forEach(order => byId.set(order.order_id, order));
+            return [...byId.values()].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          });
           setOrdersLoadError('');
           setOrdersLoadStatus('loaded');
         }
@@ -275,7 +350,7 @@ export default function App() {
       unsubscribeProducts();
       unsubscribeIngredients();
     };
-  }, [staffSession, refreshOrders]);
+  }, [staffSession]);
 
   // Lazy load analytics archives & food wastage only when manager view is accessed
   useEffect(() => {

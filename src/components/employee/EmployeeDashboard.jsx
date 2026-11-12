@@ -53,6 +53,27 @@ const getRelativeTime = (isoString, currentTime) => {
 
 const getOrderItemSizeName = (size) => (typeof size === 'string' ? size : size?.name || '');
 
+const getLocalDateKey = (date) => (
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+);
+
+const getTimelineRange = (timeline, now = new Date()) => {
+  const endDate = new Date(now);
+  const startDate = new Date(now);
+
+  if (timeline === 'yesterday') {
+    startDate.setDate(startDate.getDate() - 1);
+    endDate.setDate(endDate.getDate() - 1);
+  } else if (timeline === 'last7') {
+    startDate.setDate(startDate.getDate() - 6);
+  }
+
+  return {
+    startDate: getLocalDateKey(startDate),
+    endDate: getLocalDateKey(endDate)
+  };
+};
+
 export default function EmployeeDashboard({ 
   orders = [], 
   ordersLoadStatus = 'loaded',
@@ -77,6 +98,8 @@ export default function EmployeeDashboard({
   deleteFoodWastage
 }) {
   const [activeTab, setActiveTab] = useState('orders');
+  const [selectedTimeline, setSelectedTimeline] = useState('today');
+  const [orderDateRange, setOrderDateRange] = useState(() => getTimelineRange('today'));
   const [editingOrder, setEditingOrder] = useState(null);
   const [editingItems, setEditingItems] = useState([]);
   const [editingTotal, setEditingTotal] = useState(0);
@@ -115,9 +138,25 @@ export default function EmployeeDashboard({
 
   const getSortedOrders = (statusId) => {
     return orders
-      .filter(order => (order.status || '').toLowerCase() === statusId.toLowerCase())
+      .filter(order => {
+        const orderDate = new Date(order.timestamp);
+        if (Number.isNaN(orderDate.getTime())) return false;
+        const orderDateKey = getLocalDateKey(orderDate);
+        return (order.status || '').toLowerCase() === statusId.toLowerCase()
+          && orderDateKey >= orderDateRange.startDate
+          && orderDateKey <= orderDateRange.endDate;
+      })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   };
+
+  const handleTimelineChange = (timeline) => {
+    const range = getTimelineRange(timeline);
+    setSelectedTimeline(timeline);
+    setOrderDateRange(range);
+    refreshOrders?.(range);
+  };
+
+  const reloadSelectedTimeline = () => refreshOrders?.(orderDateRange, { force: true });
 
   const editableMenuItems = products.flatMap(product => (
     product.has_sizes && Array.isArray(product.sizes) && product.sizes.length > 0
@@ -261,7 +300,7 @@ export default function EmployeeDashboard({
 
           <button
             type="button"
-            onClick={refreshOrders}
+            onClick={reloadSelectedTimeline}
             disabled={ordersLoadStatus === 'loading'}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-medium text-xs rounded-md shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-wait"
             title="Refresh live orders from the database"
@@ -318,7 +357,7 @@ export default function EmployeeDashboard({
               <span><strong className="font-black">Live order refresh failed.</strong> {ordersLoadError}</span>
               <button
                 type="button"
-                onClick={refreshOrders}
+                onClick={reloadSelectedTimeline}
                 className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 font-black hover:bg-red-100"
               >
                 <RotateCcw className="h-3.5 w-3.5" /> Retry
@@ -330,6 +369,29 @@ export default function EmployeeDashboard({
               Refreshing orders from the database...
             </div>
           )}
+          <div className="mx-auto mt-4 flex max-w-6xl justify-end px-4 md:px-6">
+            <div className="flex items-center gap-1 rounded-xl bg-gray-100 p-1" role="group" aria-label="Order timeline">
+              {[
+                { id: 'today', label: 'Today' },
+                { id: 'yesterday', label: 'Yesterday' },
+                { id: 'last7', label: '7D' }
+              ].map(option => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => handleTimelineChange(option.id)}
+                  aria-pressed={selectedTimeline === option.id}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-black transition-all cursor-pointer ${
+                    selectedTimeline === option.id
+                      ? 'bg-secondary text-accent shadow-xs'
+                      : 'text-gray-500 hover:text-accent'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           {/* ACCORDION SECTIONS */}
           <main className="flex-grow p-4 md:p-6 max-w-6xl w-full mx-auto space-y-4">
         {columns.map((col) => {
