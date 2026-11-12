@@ -46,6 +46,7 @@ export default function ManagerDashboard({
   saveBranch,
   deleteBranch,
   saveCategory,
+  reorderCategories,
   deleteCategory,
   saveProduct,
   deleteProduct,
@@ -105,6 +106,7 @@ export default function ManagerDashboard({
           <CategoryManagement
             categories={categories}
             saveCategory={saveCategory}
+            reorderCategories={reorderCategories}
             deleteCategory={deleteCategory}
           />
         );

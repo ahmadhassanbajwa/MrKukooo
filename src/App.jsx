@@ -9,6 +9,7 @@ import {
   INITIAL_BRANCHES,
   getCategories,
   saveCategory,
+  reorderCategories as saveCategoryOrder,
   deleteCategory,
   getProducts,
   saveProduct,
@@ -582,19 +583,40 @@ export default function App() {
   };
 
   const handleSaveCategory = async (id, name, image_url) => {
+    const categoryIndex = categories.findIndex(category => category.id === id);
+    const display_order = categoryIndex >= 0
+      ? (categories[categoryIndex].display_order ?? categoryIndex)
+      : categories.length;
     setCategories(prev => {
       const idx = prev.findIndex(c => c.id === id);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = { ...next[idx], name, ...(image_url ? { image_url } : {}) };
+        next[idx] = { ...next[idx], name, display_order, ...(image_url ? { image_url } : {}) };
         return next;
       }
-      return [...prev, { id, name, image_url }];
+      return [...prev, { id, name, image_url, display_order }];
     });
     try {
-      await saveCategory(id, name, image_url);
+      await saveCategory(id, name, image_url, display_order);
     } catch (err) {
       console.error("Failed to save category:", err);
+    }
+  };
+
+  const handleReorderCategories = async (orderedCategories) => {
+    const previousCategories = categories;
+    const nextCategories = orderedCategories.map((category, display_order) => ({
+      ...category,
+      display_order
+    }));
+    setCategories(nextCategories);
+
+    try {
+      await saveCategoryOrder(nextCategories);
+    } catch (err) {
+      console.error("Failed to reorder categories:", err);
+      setCategories(previousCategories);
+      throw err;
     }
   };
 
@@ -866,6 +888,7 @@ export default function App() {
               saveBranch={handleSaveBranch}
               deleteBranch={handleDeleteBranch}
               saveCategory={handleSaveCategory}
+              reorderCategories={handleReorderCategories}
               deleteCategory={handleDeleteCategory}
               saveProduct={handleSaveProduct}
               deleteProduct={handleDeleteProduct}

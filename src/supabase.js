@@ -230,7 +230,12 @@ export const seedDatabaseIfEmpty = async () => {
 
     console.log("Seeding to Supabase in background...");
     const promises = [
-      ...INITIAL_CATEGORIES.map(cat => supabase.from('categories').upsert({ id: cat.id, name: cat.name, image_url: cat.image_url || '' })),
+      ...INITIAL_CATEGORIES.map((cat, display_order) => supabase.from('categories').upsert({
+        id: cat.id,
+        name: cat.name,
+        image_url: cat.image_url || '',
+        display_order
+      })),
       ...INITIAL_INGREDIENTS.map(ing => supabase.from('ingredients').upsert(ing)),
       ...INITIAL_BRANCHES.map(br => supabase.from('branches').upsert(br)),
       ...INITIAL_ADDONS.map(addon => supabase.from('addons').upsert({ ...addon, branch_ids: ['branch-chak-104sb'] }))
@@ -248,35 +253,67 @@ export const seedDatabaseIfEmpty = async () => {
 
 export const getCategories = async () => runDbOperation(
   async () => {
-    const { data, error } = await supabase.from('categories').select('*');
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('display_order', { ascending: true })
+      .order('id', { ascending: true });
     if (error) throw error;
     if (data) localStorage.setItem('kukooo_categories', JSON.stringify(data));
     return data;
   },
   async () => {
     const local = localStorage.getItem('kukooo_categories');
-    if (local) return JSON.parse(local);
-    localStorage.setItem('kukooo_categories', JSON.stringify(INITIAL_CATEGORIES));
-    return INITIAL_CATEGORIES;
+    const categories = local ? JSON.parse(local) : INITIAL_CATEGORIES;
+    const orderedCategories = categories.map((category, index) => ({
+      ...category,
+      display_order: category.display_order !== null
+        && category.display_order !== undefined
+        && Number.isFinite(Number(category.display_order))
+        ? Number(category.display_order)
+        : index
+    })).sort((a, b) => a.display_order - b.display_order);
+    localStorage.setItem('kukooo_categories', JSON.stringify(orderedCategories));
+    return orderedCategories;
   }
 );
 
-export const saveCategory = async (id, name, image_url = '') => {
+export const saveCategory = async (id, name, image_url = '', display_order = 0) => {
   const localList = JSON.parse(localStorage.getItem('kukooo_categories') || '[]');
   const idx = localList.findIndex(c => c.id === id);
-  if (idx >= 0) { localList[idx].name = name; if (image_url) localList[idx].image_url = image_url; }
-  else { localList.push({ id, name, image_url }); }
+  if (idx >= 0) {
+    localList[idx] = { ...localList[idx], name, display_order };
+    if (image_url) localList[idx].image_url = image_url;
+  } else {
+    localList.push({ id, name, image_url, display_order });
+  }
   localStorage.setItem('kukooo_categories', JSON.stringify(localList));
 
   return runDbOperation(
     async () => {
-      const payload = { id, name };
+      const payload = { id, name, display_order };
       if (image_url) payload.image_url = image_url;
       const { error } = await supabase.from('categories').upsert(payload);
       if (error) throw error;
     },
     async () => {}
   );
+};
+
+export const reorderCategories = async (categories) => {
+  const orderedCategories = categories.map((category, display_order) => ({
+    ...category,
+    display_order
+  }));
+
+  if (isSupabaseConfigured && supabase) {
+    const { error } = await supabase.rpc('reorder_categories', {
+      p_category_ids: orderedCategories.map(category => category.id)
+    });
+    if (error) throw error;
+  }
+
+  localStorage.setItem('kukooo_categories', JSON.stringify(orderedCategories));
 };
 
 export const deleteCategory = async (id) => {

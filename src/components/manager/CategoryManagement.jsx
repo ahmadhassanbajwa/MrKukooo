@@ -1,13 +1,31 @@
 import { useState } from 'react';
-import { Plus, Edit3, Trash2, X, Image as ImageIcon } from 'lucide-react';
+import { Plus, Edit3, Trash2, X, Image as ImageIcon, ChevronUp, ChevronDown } from 'lucide-react';
 import { uploadImage } from '../../supabase';
 
-export default function CategoryManagement({ categories, saveCategory, deleteCategory }) {
+export default function CategoryManagement({ categories, saveCategory, reorderCategories, deleteCategory }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [form, setForm] = useState({ id: '', name: '', image_url: '' });
   const [file, setFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isReordering, setIsReordering] = useState(false);
+
+  const handleMoveCategory = async (index, direction) => {
+    const targetIndex = index + direction;
+    if (isReordering || targetIndex < 0 || targetIndex >= categories.length) return;
+
+    const nextCategories = [...categories];
+    [nextCategories[index], nextCategories[targetIndex]] = [nextCategories[targetIndex], nextCategories[index]];
+    setIsReordering(true);
+    try {
+      await reorderCategories(nextCategories);
+    } catch (err) {
+      console.error('Failed to reorder categories:', err);
+      alert(`Could not save category order. ${err.message || 'Please try again.'}`);
+    } finally {
+      setIsReordering(false);
+    }
+  };
 
   const handleOpenModal = (category = null) => {
     setFile(null);
@@ -74,12 +92,13 @@ export default function CategoryManagement({ categories, saveCategory, deleteCat
               <th className="pb-3.5 pl-2">Icon / Thumbnail</th>
               <th className="pb-3.5">Category Title</th>
               <th className="pb-3.5">Reference Key</th>
+              <th className="pb-3.5">Display Order</th>
               <th className="pb-3.5 text-right pr-2">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 text-xs font-bold text-accent">
             {categories.length > 0 ? (
-              categories.map(c => (
+              categories.map((c, index) => (
                 <tr key={c.id} className="hover:bg-gray-50 transition-colors">
                   <td className="py-3 pl-2">
                     <img
@@ -90,6 +109,29 @@ export default function CategoryManagement({ categories, saveCategory, deleteCat
                   </td>
                   <td className="py-3 font-black text-accent">{c.name}</td>
                   <td className="py-3 text-gray-400 font-semibold">{c.id}</td>
+                  <td className="py-3">
+                    <div className="flex items-center gap-1">
+                      <span className="w-5 text-center">{index + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveCategory(index, -1)}
+                        disabled={isReordering || index === 0}
+                        aria-label={`Move ${c.name} up`}
+                        className="p-1 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <ChevronUp className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveCategory(index, 1)}
+                        disabled={isReordering || index === categories.length - 1}
+                        aria-label={`Move ${c.name} down`}
+                        className="p-1 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <ChevronDown className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
                   <td className="py-3 text-right pr-2 space-x-2">
                     <button
                       onClick={() => handleOpenModal(c)}
@@ -110,7 +152,7 @@ export default function CategoryManagement({ categories, saveCategory, deleteCat
               ))
             ) : (
               <tr>
-                <td colSpan="4" className="text-center py-12 text-gray-400 uppercase font-black">
+                <td colSpan="5" className="text-center py-12 text-gray-400 uppercase font-black">
                   No categories defined
                 </td>
               </tr>
