@@ -7,8 +7,11 @@
 CREATE TABLE IF NOT EXISTS public.categories (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    image_url TEXT
+    image_url TEXT,
+    display_order INTEGER
 );
+
+ALTER TABLE public.categories ADD COLUMN IF NOT EXISTS display_order INTEGER;
 
 -- 2. Ingredients
 CREATE TABLE IF NOT EXISTS public.ingredients (

@@ -2,6 +2,60 @@
 -- REFACTOR MIGRATION: RECIPE-BASED INVENTORY & INGREDIENT ANALYTICS (FIXED)
 -- ============================================================================
 
+-- Give menu categories a persistent order that can be managed from the CMS.
+ALTER TABLE public.categories ADD COLUMN IF NOT EXISTS display_order INTEGER;
+
+WITH ordered_categories AS (
+  SELECT id,
+         (SELECT COALESCE(MAX(display_order) + 1, 0) FROM public.categories)
+           + ROW_NUMBER() OVER (ORDER BY id) - 1 AS display_order
+  FROM public.categories
+  WHERE display_order IS NULL
+)
+UPDATE public.categories AS category
+SET display_order = ordered_categories.display_order
+FROM ordered_categories
+WHERE category.id = ordered_categories.id;
+
+ALTER TABLE public.categories
+  ALTER COLUMN display_order SET DEFAULT 0,
+  ALTER COLUMN display_order SET NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.reorder_categories(p_category_ids TEXT[])
+RETURNS VOID
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF NOT public.has_staff_role(ARRAY['manager']) THEN
+    RAISE EXCEPTION 'Manager authorization required to reorder categories';
+  END IF;
+
+  IF COALESCE(cardinality(p_category_ids), 0) <> (SELECT COUNT(*) FROM public.categories)
+     OR cardinality(p_category_ids) <> (
+       SELECT COUNT(DISTINCT requested.category_id)
+       FROM unnest(p_category_ids) AS requested(category_id)
+     )
+     OR EXISTS (
+       SELECT 1
+       FROM unnest(p_category_ids) AS requested(category_id)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM public.categories AS category WHERE category.id = requested.category_id
+       )
+     ) THEN
+    RAISE EXCEPTION 'Category order must contain every category exactly once';
+  END IF;
+
+  UPDATE public.categories AS category
+  SET display_order = requested.position - 1
+  FROM unnest(p_category_ids) WITH ORDINALITY AS requested(category_id, position)
+  WHERE category.id = requested.category_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.reorder_categories(TEXT[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.reorder_categories(TEXT[]) TO authenticated;
+
 -- Step 0: Temporarily disable the employee guard trigger so administrative 
 -- schema backfills can update the ingredients table without requiring an active staff session
 DROP TRIGGER IF EXISTS ingredients_employee_column_guard ON public.ingredients;
@@ -131,6 +185,22 @@ CREATE POLICY wastage_log_staff_insert ON public.wastage_log
   FOR INSERT TO authenticated
   WITH CHECK (public.has_staff_role(ARRAY['manager', 'employee']));
 
+-- Ensure staff can read orders and update their status in existing deployments.
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+GRANT SELECT ON public.orders TO authenticated;
+GRANT UPDATE (status) ON public.orders TO authenticated;
+
+DROP POLICY IF EXISTS orders_staff_read ON public.orders;
+CREATE POLICY orders_staff_read ON public.orders
+  FOR SELECT TO authenticated
+  USING (public.has_staff_role(ARRAY['manager', 'employee']));
+
+DROP POLICY IF EXISTS orders_staff_update ON public.orders;
+CREATE POLICY orders_staff_update ON public.orders
+  FOR UPDATE TO authenticated
+  USING (public.has_staff_role(ARRAY['manager', 'employee']))
+  WITH CHECK (public.has_staff_role(ARRAY['manager', 'employee']));
+
 
 -- 5. AUTOMATED TRIGGER: DEDUCT RECIPE-BASED STOCK ON ORDER COMPLETED
 -- Executes when orders.status updates to 'completed' (case-insensitive)
@@ -144,7 +214,7 @@ DECLARE
   order_item JSONB;
   prod_id TEXT;
   item_qty NUMERIC;
-  size_name TEXT;
+  order_size_name TEXT;
   rec RECORD;
   direct_ing JSONB;
   ing_id TEXT;
@@ -160,7 +230,7 @@ BEGIN
     LOOP
       prod_id := COALESCE(order_item->>'product_id', order_item->>'id');
       item_qty := GREATEST(1, COALESCE(NULLIF(order_item->>'quantity', '')::NUMERIC, 1));
-      size_name := COALESCE(order_item->'size'->>'name', order_item->>'size');
+      order_size_name := COALESCE(order_item->'size'->>'name', order_item->>'size');
       has_recipe_match := false;
 
       -- 1. Try relational recipe_mapping table first
@@ -172,8 +242,8 @@ BEGIN
         FROM public.recipe_mapping rm
         WHERE rm.menu_item_id = prod_id
           AND (
-            (size_name IS NOT NULL AND rm.size_name = size_name)
-            OR (size_name IS NULL AND rm.size_name IS NULL)
+            (order_size_name IS NOT NULL AND rm.size_name = order_size_name)
+            OR (order_size_name IS NULL AND rm.size_name IS NULL)
             OR (rm.size_name IS NULL)
           )
       LOOP

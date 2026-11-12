@@ -67,6 +67,15 @@ MrKukooo/
 
 ---
 
+### Supabase database setup
+
+For a new Supabase project, run `supabase_schema.sql` and then
+`supabase_recipe_migration.sql` in the Supabase SQL Editor. For an existing
+project, rerun `supabase_recipe_migration.sql` to apply the category ordering,
+staff-only order status permissions, and corrected order-completion trigger.
+Managers can change the storefront category sequence in the Categories section
+of the manager portal using the up/down controls.
+
 ## 🌐 How to Upload to GitHub & Deploy to Vercel
 
 The directory is fully set up as a standard single-page app and is ready for Vercel deployment.
