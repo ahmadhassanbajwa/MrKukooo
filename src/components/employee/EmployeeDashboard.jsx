@@ -51,6 +51,8 @@ const getRelativeTime = (isoString, currentTime) => {
   return `${mins} mins ago`;
 };
 
+const getOrderItemSizeName = (size) => (typeof size === 'string' ? size : size?.name || '');
+
 export default function EmployeeDashboard({ 
   orders = [], 
   ordersLoadStatus = 'loaded',
@@ -117,6 +119,22 @@ export default function EmployeeDashboard({
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   };
 
+  const editableMenuItems = products.flatMap(product => (
+    product.has_sizes && Array.isArray(product.sizes) && product.sizes.length > 0
+      ? product.sizes.map(size => ({
+          product,
+          size,
+          price: Number(size.price) || 0,
+          key: `${product.id}-${size.name}`
+        }))
+      : [{
+          product,
+          size: null,
+          price: Number(product.price) || 0,
+          key: `${product.id}-default`
+        }]
+  ));
+
   const handleOpenEditor = (order) => {
     setEditingOrder(order);
     setEditingItems(order.items.map(item => ({ ...item })));
@@ -125,8 +143,9 @@ export default function EmployeeDashboard({
 
   const recalculateTotal = (items) => {
     const sum = items.reduce((acc, item) => {
-      const addonCost = item.addons?.reduce((s, a) => s + a.price, 0) || 0;
-      return acc + ((item.price + addonCost) * item.quantity);
+      const addonCost = item.addons?.reduce((total, addon) => total + (Number(addon.price) || 0), 0) || 0;
+      const unitPrice = item.totalPricePerUnit ?? ((Number(item.price) || 0) + addonCost);
+      return acc + (unitPrice * item.quantity);
     }, 0);
     setEditingTotal(sum);
   };
@@ -149,12 +168,19 @@ export default function EmployeeDashboard({
     recalculateTotal(updated);
   };
 
-  const handleAddItem = (productId) => {
-    if (!productId) return;
-    const match = products.find(p => p.id.toString() === productId.toString());
-    if (!match) return;
+  const handleAddItem = (menuItemIndex) => {
+    if (menuItemIndex === '') return;
+    const menuItem = editableMenuItems[Number(menuItemIndex)];
+    if (!menuItem) return;
+    const { product, size, price } = menuItem;
+    const productId = String(product.id);
+    const sizeName = size?.name || '';
 
-    const existingIndex = editingItems.findIndex(it => it.name === match.name && (!it.addons || it.addons.length === 0));
+    const existingIndex = editingItems.findIndex(item =>
+      String(item.product_id || item.id || '') === productId
+      && getOrderItemSizeName(item.size) === sizeName
+      && (!item.addons || item.addons.length === 0)
+    );
     let updated;
     if (existingIndex >= 0) {
       updated = editingItems.map((item, idx) => {
@@ -167,9 +193,14 @@ export default function EmployeeDashboard({
       updated = [
         ...editingItems,
         {
-          product_id: match.id,
-          name: match.name,
-          price: parseFloat(match.price),
+          id: product.id,
+          product_id: product.id,
+          name: product.name,
+          image_url: product.image_url,
+          price,
+          totalPricePerUnit: price,
+          unitCost: Number(size?.cost ?? product.cost) || 0,
+          ...(size ? { size } : {}),
           quantity: 1,
           addons: [],
           notes: ''
@@ -584,8 +615,10 @@ export default function EmployeeDashboard({
                   className="w-full bg-gray-55 border-2 border-accent px-3 py-2 rounded-lg font-bold focus:outline-none text-sm cursor-pointer"
                 >
                   <option value="">-- Choose item to add --</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} - Rs. {p.price}</option>
+                  {editableMenuItems.map(({ product, size, price, key }, index) => (
+                    <option key={key} value={index}>
+                      {product.name}{size ? ` - ${size.name}` : ''} - Rs. {price}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -594,11 +627,14 @@ export default function EmployeeDashboard({
                 <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider block">Items in Order</span>
                 {editingItems.map((item, idx) => {
                   const addonCost = item.addons?.reduce((s, a) => s + a.price, 0) || 0;
-                  const rowPrice = (item.price + addonCost) * item.quantity;
+                  const unitPrice = item.totalPricePerUnit ?? ((Number(item.price) || 0) + addonCost);
+                  const rowPrice = unitPrice * item.quantity;
                   return (
                     <div key={idx} className="border-b border-gray-150 pb-2 last:border-b-0 space-y-1">
                       <div className="flex items-center justify-between text-xs font-bold">
-                        <span className="truncate max-w-[160px]">{item.name}</span>
+                        <span className="truncate max-w-[160px]">
+                          {item.name}{getOrderItemSizeName(item.size) ? ` (${getOrderItemSizeName(item.size)})` : ''}
+                        </span>
                         <div className="flex items-center gap-2">
                           <div className="flex items-center gap-1.5 bg-white border border-accent/30 rounded-lg px-1.5 py-0.5">
                             <button
