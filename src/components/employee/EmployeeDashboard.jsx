@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { getWhatsAppLink } from '../../utils/whatsapp';
 import { printReceipt } from '../../utils/printReceipt';
+import { getOrderDiscount } from '../../utils/voucherUtils';
 import InventoryManager from '../InventoryManager';
 
 
@@ -52,6 +53,7 @@ const getRelativeTime = (isoString, currentTime) => {
 };
 
 const getOrderItemSizeName = (size) => (typeof size === 'string' ? size : size?.name || '');
+const getOrderItemUnitPrice = (item) => Number(item.totalPricePerUnit ?? item.price) || 0;
 
 const getLocalDateKey = (date) => (
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -182,9 +184,7 @@ export default function EmployeeDashboard({
 
   const recalculateTotal = (items) => {
     const sum = items.reduce((acc, item) => {
-      const addonCost = item.addons?.reduce((total, addon) => total + (Number(addon.price) || 0), 0) || 0;
-      const unitPrice = item.totalPricePerUnit ?? ((Number(item.price) || 0) + addonCost);
-      return acc + (unitPrice * item.quantity);
+      return acc + (getOrderItemUnitPrice(item) * (Number(item.quantity) || 0));
     }, 0);
     setEditingTotal(sum);
   };
@@ -507,13 +507,16 @@ export default function EmployeeDashboard({
                           </div>
 
                           <div className="border-t border-dashed border-gray-200 pt-3 space-y-2">
+                            <h5 className="text-[10px] font-black uppercase tracking-wider text-gray-400">
+                              Ordered Items ({order.items.length})
+                            </h5>
                             {order.items.map((item, idx) => {
-                              const addonCost = item.addons?.reduce((s, a) => s + a.price, 0) || 0;
-                              const rowPrice = (item.price + addonCost) * item.quantity;
+                              const rowPrice = getOrderItemUnitPrice(item) * (Number(item.quantity) || 0);
+                              const sizeName = getOrderItemSizeName(item.size);
                               return (
                                 <div key={idx} className="border-b border-gray-100 pb-2 last:border-b-0">
                                   <div className="flex justify-between text-xs font-bold text-accent">
-                                    <span>{item.quantity}x {item.name}</span>
+                                    <span>{item.quantity}x {item.name}{sizeName ? ` (${sizeName})` : ''}</span>
                                     <span className="text-gray-400">Rs. {rowPrice}</span>
                                   </div>
                                   {item.addons && item.addons.length > 0 && (
@@ -539,8 +542,22 @@ export default function EmployeeDashboard({
                               </div>
                             )}
 
+                            {Number(order.delivery_fee) > 0 && (
+                              <div className="flex justify-between text-xs font-bold text-gray-500">
+                                <span>Delivery Fee</span>
+                                <span>Rs. {Number(order.delivery_fee)}</span>
+                              </div>
+                            )}
+                            {getOrderDiscount(order) > 0 && (
+                              <div className="flex justify-between text-xs font-bold text-red-600">
+                                <span>
+                                  Discount{order.voucher_code ? ` (${order.voucher_code})` : ''}
+                                </span>
+                                <span>- Rs. {getOrderDiscount(order)}</span>
+                              </div>
+                            )}
                             <div className="flex justify-between text-sm font-black text-accent border-t border-gray-150 pt-2.5 mt-2">
-                              <span>Total Amount</span>
+                              <span>Total Bill Paid</span>
                               <span className="text-primary">Rs. {order.total_amount}</span>
                             </div>
                           </div>
@@ -688,9 +705,7 @@ export default function EmployeeDashboard({
               <div className="max-h-48 overflow-y-auto space-y-2 border-2 border-dashed border-accent/40 p-3 rounded-xl bg-gray-50">
                 <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider block">Items in Order</span>
                 {editingItems.map((item, idx) => {
-                  const addonCost = item.addons?.reduce((s, a) => s + a.price, 0) || 0;
-                  const unitPrice = item.totalPricePerUnit ?? ((Number(item.price) || 0) + addonCost);
-                  const rowPrice = unitPrice * item.quantity;
+                  const rowPrice = getOrderItemUnitPrice(item) * (Number(item.quantity) || 0);
                   return (
                     <div key={idx} className="border-b border-gray-150 pb-2 last:border-b-0 space-y-1">
                       <div className="flex items-center justify-between text-xs font-bold">
