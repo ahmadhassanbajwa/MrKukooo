@@ -40,6 +40,16 @@ export const INITIAL_BRANCHES = [
   }
 ];
 
+const getDefaultBranchDeliveryZones = () => [
+  { maxRadius: 5, charge: 0 },
+  { maxRadius: 15, charge: 150 }
+];
+
+const normalizeBranch = ({ delivery_zones: deliveryZones, ...branch }) => ({
+  ...branch,
+  deliveryZones: branch.deliveryZones || deliveryZones || getDefaultBranchDeliveryZones()
+});
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const cloudinaryCloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
@@ -1542,26 +1552,40 @@ export const getBranches = async () => runDbOperation(
   async () => {
     const { data, error } = await supabase.from('branches').select('*');
     if (error) throw error;
-    if (data) localStorage.setItem('kukooo_branches', JSON.stringify(data));
-    return data;
+    const branches = (data || []).map(normalizeBranch);
+    localStorage.setItem('kukooo_branches', JSON.stringify(branches));
+    return branches;
   },
   async () => {
     const local = localStorage.getItem('kukooo_branches');
-    if (local) return JSON.parse(local);
+    if (local) return JSON.parse(local).map(normalizeBranch);
     localStorage.setItem('kukooo_branches', JSON.stringify(INITIAL_BRANCHES));
     return INITIAL_BRANCHES;
   }
 );
 
 export const saveBranch = async (branch) => {
-  const payload = { id: branch.id.toString(), name: branch.name, address: branch.address, lat: parseFloat(branch.lat) || 0, lng: parseFloat(branch.lng) || 0, maps_link: branch.maps_link || '' };
+  const deliveryZones = branch.deliveryZones || getDefaultBranchDeliveryZones();
+  const branchData = {
+    id: branch.id.toString(),
+    name: branch.name,
+    address: branch.address,
+    lat: parseFloat(branch.lat) || 0,
+    lng: parseFloat(branch.lng) || 0,
+    maps_link: branch.maps_link || ''
+  };
+  const payload = { ...branchData, delivery_zones: deliveryZones };
+  const localPayload = { ...branchData, deliveryZones };
   const localList = JSON.parse(localStorage.getItem('kukooo_branches') || '[]');
   const idx = localList.findIndex(b => b.id === payload.id);
-  if (idx >= 0) localList[idx] = payload; else localList.push(payload);
+  if (idx >= 0) localList[idx] = localPayload; else localList.push(localPayload);
   localStorage.setItem('kukooo_branches', JSON.stringify(localList));
 
   return runDbOperation(
-    async () => { await supabase.from('branches').upsert(payload); },
+    async () => {
+      const { error } = await supabase.from('branches').upsert(payload);
+      if (error) throw error;
+    },
     async () => {}
   );
 };
